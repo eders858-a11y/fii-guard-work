@@ -1,0 +1,35 @@
+# Project TODO
+
+- [x] Implementar persistência local para fundos, operações, proventos, cotações e preferências.
+- [x] Implementar cálculo de posição, preço médio, resultado realizado e resultado em aberto.
+- [x] Implementar compras e vendas manuais com edição, exclusão e validação de saldo.
+- [x] Implementar proventos manuais com rendimentos, amortizações e cálculo por data-com.
+- [x] Implementar telas Início, Carteira, Detalhe, Proventos, Resultados e Ajustes.
+- [x] Implementar relatórios mensais e anuais com virada automática de calendário.
+- [x] Implementar serviço Python baseado em yfinance para cotação e dividendos.
+- [x] Implementar sincronização apenas ao abrir o app e por atualização manual.
+- [x] Implementar backup local JSON com exportação e restauração confirmada.
+- [x] Decisão de identidade: não usar a marca específica GARE 11; adotar o ícone genérico de carteira multi-FII enviado pelo usuário.
+- [x] Executar testes unitários de cálculos e checagem TypeScript.
+- [x] Salvar checkpoint final e orientar a geração do APK no painel de publicação.
+- [x] Usar o novo ícone quadrado de carteira e gráfico enviado pelo usuário nos recursos de launcher, splash, favicon e ícone adaptativo.
+- [x] Integrar brapi como fonte principal usando a credencial fornecida, com yfinance como alternativa documentada.
+- [x] Validar a credencial brapi sem expor o valor em código ou na interface.
+- [x] Inspecionar passivamente a estrutura visual e os textos do APK ControleFii como referência.
+- [x] Adicionar catálogo de FIIs e sugestões de ticker em tempo real durante a digitação.
+- [x] Atualizar dados do fundo selecionado automaticamente após a sugestão ser escolhida.
+- [x] Mostrar simulação de PM, custo total e posição resultante em tempo real no formulário de compra e venda.
+- [x] Reproduzir os fluxos principais e a hierarquia visual do ControleFii sem executar o APK de referência.
+- [x] Auditar e corrigir o contraste dos cartões, textos e estados vazios do dashboard.
+- [x] Criar dashboard profissional com gráfico de rosca de alocação por FII e rosca de composição do resultado/proventos.
+- [x] Corrigir o layout responsivo para que valores, tickers e indicadores permaneçam legíveis no Android.
+- [x] Revisar todos os botões e fluxos de navegação, cadastro, edição e exclusão.
+- [x] Fazer a tela de atualização brapi funcionar com feedback de carregamento, sucesso e erro, usando a chave protegida.
+- [x] Validar atualização ao abrir o app e atualizar cotações/proventos sem duplicar registros.
+- [x] Capturar e revisar screenshots do dashboard e dos formulários antes do novo checkpoint.
+- [x] Exibir e aceitar datas no formato brasileiro DD/MM/AAAA, convertendo internamente para o formato de cálculo.
+- [x] Criar entrada monetária em centavos, convertendo 7295 em 72,95 automaticamente.
+- [x] Mover a evolução de dividendos para a aba Proventos.
+- [x] Montar tabela automática de proventos por FII com quantidade na data-com, valor por cota e total por evento.
+- [x] Mostrar total do mês e acumulado do ano abaixo do gráfico na aba Proventos.
+- [x] Validar os formatos brasileiros e o resumo em telas Android estreitas.
