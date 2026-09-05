@@ -1,86 +1,310 @@
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  View, Text, StyleSheet, ScrollView, TouchableOpacity,
+  ActivityIndicator, RefreshControl, Alert, Dimensions
+} from 'react-native';
+import { BarChart } from 'react-native-chart-kit';
 import { router, Stack } from "expo-router";
-import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
-import { useMemo, useState } from "react";
-import { usePortfolio, type Dividend } from "@/lib/portfolio";
+import { usePortfolio } from "@/lib/portfolio";
 import { ScreenContainer } from "@/components/screen-container";
-import { Button, EmptyState, LoadingState } from "@/components/portfolio-ui";
-import { currency, date, monthLabel } from "@/lib/format";
-import { themeColors } from "@/lib/theme-presets";
+import {
+  fetchProventosCarteira, mediaHistorica, ProventoBrapi, MESES, BRAPI_TOKEN,
+} from '@/lib/brapi-proventos';
+import {
+  resumoDoMes, resumoDoAno, ResumoMes, fmtBRL, fmtDataBR,
+} from '@/lib/proventos-logic';
 
-const shift = (key: string, delta: number) => {
-  const [year, month] = key.split("-").map(Number);
-  return new Date(Date.UTC(year, month - 1 + delta, 1)).toISOString().slice(0, 7);
-};
-
-const cleanTicker = (value: string) => value.trim().toUpperCase().replace(/[^A-Z0-9]/g, "").replace(/SA$/, "");
-const quantityAt = (ticker: string, reference: string, operations: { ticker: string; date: string; kind: "buy" | "sell"; quantity: number }[]) =>
-  operations.filter((item) => cleanTicker(item.ticker) === cleanTicker(ticker) && item.date <= reference).reduce((total, item) => total + (item.kind === "buy" ? item.quantity : -item.quantity), 0);
-
-function DividendTableRow({ item, operations, colors }: { item: Dividend; operations: { ticker: string; date: string; kind: "buy" | "sell"; quantity: number }[]; colors: ReturnType<typeof themeColors> }) {
-  const referenceDate = item.dateCom || (item.source === "manual" ? item.paymentDate : "");
-  const quantity = Math.max(0, referenceDate ? quantityAt(item.ticker, referenceDate, operations) : 0);
-  const total = quantity * item.amountPerShare;
-  return (
-    <View style={[styles.row, { borderBottomColor: "#4A4D50" }]}>
-      <Text style={[styles.dateCell, { color: colors.textColor }]}>{date(item.paymentDate)}{item.dateCom ? `\n${date(item.dateCom)}` : "\n—"}</Text>
-      <Text style={[styles.tickerCell, { color: colors.textColor }]}>{item.ticker}</Text>
-      <Text style={[styles.kindCell, { color: colors.textColor }]}>{item.kind === "income" ? "Rendimento" : "Amortização"}</Text>
-      <Text style={[styles.quantityCell, { color: colors.textColor }]}>{quantity || "—"}</Text>
-      <Text style={[styles.unitCell, { color: colors.textColor }]}>{item.amountPerShare.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
-      <View style={styles.totalCell}><Text style={[styles.totalText, { color: colors.textColor }]}>{currency(total)}</Text></View>
-    </View>
-  );
-}
-
-function HistoryChart({ values, colors }: { values: { key: string; value: number }[]; colors: ReturnType<typeof themeColors> }) {
-  const max = Math.max(...values.map((item) => item.value), 0);
-  return (
-    <View style={styles.chart}>
-      <View style={styles.yAxis}>{[20, 15, 10, 5, 0].map((value) => <Text key={value} style={[styles.axisText, { color: colors.textColor }]}>{value}</Text>)}</View>
-      <View style={styles.chartColumns}>
-        {values.map((item) => {
-          const height = max ? Math.max(10, item.value / max * 245) : 10;
-          return <View key={item.key} style={styles.barColumn}><Text style={[styles.barValue, { color: colors.textColor }]}>{item.value ? item.value.toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : "—"}</Text><View style={[styles.bar, { height, backgroundColor: colors.accent }]} /><Text style={[styles.barLabel, { color: colors.textColor }]}>{monthLabel(item.key).slice(0, 3).toUpperCase()}</Text></View>;
-        })}
-      </View>
-    </View>
-  );
-}
+const SCREEN_W = Dimensions.get('window').width;
 
 export default function DividendsScreen() {
-  const { ready, dividends, operations, deleteDividend, settings } = usePortfolio();
-  const [selected, setSelected] = useState(new Date().toISOString().slice(0, 7));
-  const colors = themeColors(settings.themeName);
-  const data = useMemo(() => [...dividends].sort((a, b) => b.paymentDate.localeCompare(a.paymentDate)), [dividends]);
-  const periodData = useMemo(() => data.filter((item) => item.paymentDate.slice(0, 7) === selected && (item.dateCom || item.source === "manual") && quantityAt(item.ticker, item.dateCom || item.paymentDate, operations) > 0), [data, selected, operations]);
-  const totalFor = (items: Dividend[]) => items.reduce((sum, item) => sum + ((item.dateCom || item.source === "manual") ? Math.max(0, quantityAt(item.ticker, item.dateCom || item.paymentDate, operations)) * item.amountPerShare : 0), 0);
-  const monthTotal = useMemo(() => totalFor(periodData), [periodData, operations]);
-  const chart = useMemo(() => Array.from({ length: 6 }, (_, index) => { const key = shift(selected, index - 5); return { key, value: totalFor(data.filter((item) => item.paymentDate.slice(0, 7) === key && (item.dateCom || item.source === "manual") && quantityAt(item.ticker, item.dateCom || item.paymentDate, operations) > 0)) }; }), [data, operations, selected]);
-  if (!ready) return <LoadingState />;
-  const surface = colors.cardColor;
-  const borderColor = "#4A4D50";
-  return <ScreenContainer style={{ backgroundColor: surface }} edges={["top", "left", "right"]}>
-    <Stack.Screen options={{ headerShown: false }} />
-    <FlatList data={periodData} keyExtractor={(item) => item.id} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}
-      ListHeaderComponent={<View>
-        <View style={styles.topBar}><Text style={[styles.menu, { color: colors.textColor }]}>☰</Text><Text style={[styles.title, { color: colors.textColor }]}>Agenda Dividendos</Text><Text style={[styles.headerIcon, { color: colors.textColor }]}>◉</Text><Text style={[styles.search, { color: colors.textColor }]}>⌕</Text></View>
-        <View style={styles.filters}><Text style={[styles.filterFund, { color: colors.textColor }]}>▣  Meus FIIs⌄</Text><Pressable onPress={() => setSelected((value) => shift(value, -1))}><Text style={[styles.arrow, { color: colors.textColor }]}>‹</Text></Pressable><Text style={[styles.filterMonth, { color: colors.textColor }]}>{monthLabel(selected).split(" ")[0]}⌄</Text><Text style={[styles.filterYear, { color: colors.textColor }]}>{selected.slice(0, 4)}⌄</Text><Pressable onPress={() => setSelected((value) => shift(value, 1))}><Text style={[styles.arrow, { color: colors.textColor }]}>›</Text></Pressable></View>
-        <View style={[styles.sectionBar, { borderColor }]}><Text style={[styles.sectionTitle, { color: colors.textColor }]}>$  Proventos: Meus FIIs</Text><Pressable onPress={() => router.push("/dividend-form" as any)}><Text style={[styles.chevron, { color: colors.accent }]}>›</Text></Pressable></View>
-        <View style={[styles.tableHeader, { borderColor }]}><Text style={[styles.dateCell, styles.headerText, { color: colors.textColor }]}>Pgto. / Com.</Text><Text style={[styles.tickerCell, styles.headerText, { color: colors.textColor }]}>Ativo</Text><Text style={[styles.kindCell, styles.headerText, { color: colors.textColor }]}>Tipo</Text><Text style={[styles.quantityCell, styles.headerText, { color: colors.textColor }]}>Qtde.</Text><Text style={[styles.unitCell, styles.headerText, { color: colors.textColor }]}>Vl.unit.</Text><Text style={[styles.totalCell, styles.headerText, { color: colors.textColor }]}>Total</Text></View>
-      </View>}
-      renderItem={({ item }) => <DividendTableRow item={item} operations={operations} colors={colors} />}
-      ListEmptyComponent={<EmptyState title="Nenhum provento registrado" description="Ao sincronizar a carteira, os eventos encontrados serão preenchidos aqui usando as quantidades dos seus FIIs." action={<Button title="Registrar provento" onPress={() => router.push("/dividend-form" as any)} />} />}
-      ListFooterComponent={<View>
-        <View style={styles.totalLine}><Text style={[styles.totalLineText, { color: colors.textColor }]}>¹Total no mês: {currency(monthTotal)}</Text><Text style={[styles.info, { color: colors.accent }]}>●</Text></View>
-        <View style={[styles.note, { borderColor }]}><Text style={[styles.noteText, { color: colors.textColor }]}>¹ - Valores podem conter variações; ² - Quantidade do ativo na data-com; ³ - Data provável do pagamento.</Text></View>
-        <View style={[styles.sectionBar, styles.historyBar, { borderColor }]}><Text style={[styles.sectionTitle, { color: colors.textColor }]}>▥  Histórico: Meus FIIs</Text><Text style={[styles.chevron, { color: colors.accent }]}>›</Text></View>
-        <HistoryChart values={chart} colors={colors} />
-        <Text style={[styles.footer, { color: colors.textColor }]}>Os valores podem variar e devem ser conferidos nos informes oficiais do fundo.</Text>
-      </View>}
-    />
-  </ScreenContainer>;
+  const { operations, ready } = usePortfolio();
+  const hoje = new Date();
+  const [ano, setAno] = useState(hoje.getFullYear());
+  const [mes, setMes] = useState(hoje.getMonth() + 1); // 1..12
+  const [oculto, setOculto] = useState(false);
+  const [carregando, setCarregando] = useState(true);
+  const [progresso, setProgresso] = useState('');
+  const [atualizando, setAtualizando] = useState(false);
+
+  const [provPorTicker, setProvPorTicker] = useState<Record<string, ProventoBrapi[]>>({});
+  const [mediaPorTicker, setMediaPorTicker] = useState<Record<string, number>>({});
+
+  // Mapeia operações do usePortfolio para o formato esperado pela lógica de proventos
+  const movs = useMemo(() => operations.map(op => ({
+    ticker: op.ticker,
+    data: op.date,
+    tipo: op.kind === 'buy' ? 'C' : 'V',
+    quantidade: op.quantity
+  })), [operations]);
+
+  const carregar = useCallback(async (force = false) => {
+    if (!ready) return;
+    setCarregando(true);
+    setProgresso('Lendo carteira...');
+
+    const tks = [...new Set(movs.map(x => x.ticker.toUpperCase()))];
+    if (!tks.length) {
+      setCarregando(false);
+      setProgresso('');
+      return;
+    }
+
+    if (BRAPI_TOKEN.startsWith('SEU_TOKEN')) {
+      // Omitido alerta repetitivo no console, mas útil para o usuário saber
+      console.warn('Token brapi não configurado em lib/brapi-proventos.ts');
+    }
+
+    try {
+      const prov = await fetchProventosCarteira(tks, (d, t) => {
+        setProgresso(`Buscando proventos... ${d}/${t}`);
+      }, force);
+      setProvPorTicker(prov);
+
+      const medias: Record<string, number> = {};
+      for (const t of tks) medias[t] = mediaHistorica(prov[t] || []);
+      setMediaPorTicker(medias);
+    } catch (e) {
+      console.error('Erro ao buscar proventos:', e);
+    }
+
+    setCarregando(false);
+    setProgresso('');
+  }, [movs, ready]);
+
+  useEffect(() => {
+    if (ready) carregar(false);
+  }, [ready]);
+
+  const resumoMes: ResumoMes = useMemo(
+    () => resumoDoMes(ano, mes, movs, provPorTicker, mediaPorTicker),
+    [ano, mes, movs, provPorTicker, mediaPorTicker],
+  );
+
+  const resumoAno = useMemo(
+    () => resumoDoAno(ano, movs, provPorTicker, mediaPorTicker),
+    [ano, movs, provPorTicker, mediaPorTicker],
+  );
+  const totalAno = resumoAno.reduce((s, r) => s + r.totalMes, 0);
+  const acumuladoAteMes = resumoAno.filter(r => r.mes <= mes).reduce((s, r) => s + r.totalMes, 0);
+
+  const navegarMes = (dir: 1 | -1) => {
+    let m = mes + dir, a = ano;
+    if (m < 1) { m = 12; a--; }
+    if (m > 12) { m = 1; a++; }
+    setMes(m); setAno(a);
+  };
+
+  const valorTxt = (v: number, casas = 2) => (oculto ? '••••' : fmtBRL(v, casas));
+
+  if (!ready) return (
+    <View style={[st.container, st.loadingBox]}>
+      <ActivityIndicator color="#29B6F6" size="large" />
+    </View>
+  );
+
+  return (
+    <View style={st.container}>
+      <Stack.Screen options={{ headerShown: false }} />
+      {/* Cabeçalho */}
+      <View style={st.header}>
+        <Text style={st.headerIco}>☰</Text>
+        <Text style={st.headerTitulo}>Proventos</Text>
+        <View style={{ flexDirection: 'row', gap: 16 }}>
+          <TouchableOpacity onPress={() => setOculto(!oculto)}>
+            <Text style={st.headerIco}>{oculto ? '🙈' : '👁'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={async () => {
+            setAtualizando(true);
+            await carregar(true);
+            setAtualizando(false);
+          }}>
+            <Text style={st.headerIco}>🔄</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* Seletores carteira / mês / ano */}
+      <View style={st.filtros}>
+        <View style={st.dropdown}><Text style={st.dropdownTxt}>Meus FIIs ▾</Text></View>
+        <TouchableOpacity style={st.seta} onPress={() => navegarMes(-1)}>
+          <Text style={st.setaTxt}>‹</Text>
+        </TouchableOpacity>
+        <View style={st.dropdown}><Text style={st.dropdownTxt}>{MESES[mes - 1]} ▾</Text></View>
+        <View style={st.dropdown}><Text style={st.dropdownTxt}>{ano} ▾</Text></View>
+        <TouchableOpacity style={st.seta} onPress={() => navegarMes(1)}>
+          <Text style={st.setaTxt}>›</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Grade rápida de meses */}
+      <View style={{ height: 60 }}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          <View style={st.mesesRow}>
+            {MESES.map((nm, i) => (
+              <TouchableOpacity key={nm} onPress={() => setMes(i + 1)}
+                style={[st.mesChip, mes === i + 1 && st.mesChipSel]}>
+                <Text style={[st.mesChipTxt, mes === i + 1 && st.mesChipTxtSel]}>{nm}</Text>
+                <Text style={[st.mesChipVal, mes === i + 1 && st.mesChipTxtSel]}>
+                  {valorTxt(resumoAno[i]?.totalMes ?? 0)}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </ScrollView>
+      </View>
+
+      {carregando && !atualizando ? (
+        <View style={st.loadingBox}>
+          <ActivityIndicator color="#29B6F6" size="large" />
+          <Text style={st.loadingTxt}>{progresso}</Text>
+        </View>
+      ) : (
+        <ScrollView
+          refreshControl={
+            <RefreshControl refreshing={atualizando} onRefresh={async () => {
+              setAtualizando(true); await carregar(true); setAtualizando(false);
+            }} tintColor="#29B6F6" />
+          }>
+
+          {/* ===== Tabela de proventos do mês ===== */}
+          <View style={st.card}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <Text style={st.cardTitulo}>💲 Proventos: Meus FIIs ›</Text>
+              <TouchableOpacity onPress={() => router.push("/dividend-form" as any)}>
+                <Text style={{ color: '#29B6F6', fontWeight: 'bold' }}>+ Novo</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={[st.linha, st.linhaCab]}>
+              <Text style={[st.cel, st.cData, st.cabTxt]}>Dt.Pgto.</Text>
+              <Text style={[st.cel, st.cAtivo, st.cabTxt]}>Ativo</Text>
+              <Text style={[st.cel, st.cTipo, st.cabTxt]}>Tipo</Text>
+              <Text style={[st.cel, st.cNum, st.cabTxt]}>Qtde.</Text>
+              <Text style={[st.cel, st.cNum, st.cabTxt]}>Vl.unit.</Text>
+              <Text style={[st.cel, st.cNum, st.cabTxt]}>Total</Text>
+            </View>
+
+            {resumoMes.itens.length === 0 && (
+              <Text style={st.vazio}>Nenhum provento em {MESES[mes - 1]}/{ano}</Text>
+            )}
+
+            {resumoMes.itens.map((it, idx) => (
+              <View key={idx} style={[st.linha, idx % 2 === 1 && st.linhaAlt]}>
+                <Text style={[st.cel, st.cData]}>{fmtDataBR(it.dataPagamento)}</Text>
+                <Text style={[st.cel, st.cAtivo, { color: '#29B6F6', fontWeight: '600' }]}>
+                  {it.ticker}{it.estimado ? '*' : ''}
+                </Text>
+                <Text style={[st.cel, st.cTipo]}>{it.tipo}</Text>
+                <Text style={[st.cel, st.cNum]}>{it.quantidadeNaDataCom}</Text>
+                <Text style={[st.cel, st.cNum]}>{valorTxt(it.valorUnitario, 3)}</Text>
+                <Text style={[st.cel, st.cNum, { fontWeight: '600' }]}>{valorTxt(it.valorTotal)}</Text>
+              </View>
+            ))}
+
+            <View style={st.totalBox}>
+              <Text style={st.totalTxt}>Total no mês: R$ {valorTxt(resumoMes.totalMes)}</Text>
+              <Text style={st.totalTxtSec}>
+                Acumulado no ano até {MESES[mes - 1]}: R$ {valorTxt(acumuladoAteMes)}
+              </Text>
+              <Text style={st.totalTxtSec}>Total do ano {ano}: R$ {valorTxt(totalAno)}</Text>
+            </View>
+
+            <Text style={st.legenda}>
+              1 - Valores podem conter variações; 2 - Quantidade do ativo na data-com;
+              3 - Data provável do pagamento.  * Estimado pela média dos últimos rendimentos.
+            </Text>
+          </View>
+
+          {/* ===== Histórico anual (gráfico de barras) ===== */}
+          <View style={st.card}>
+            <Text style={st.cardTitulo}>📊 Histórico {ano}: Meus FIIs ›</Text>
+            <BarChart
+              data={{
+                labels: MESES,
+                datasets: [{ data: resumoAno.map(r => Math.round(r.totalMes * 100) / 100) }],
+              }}
+              width={SCREEN_W - 48}
+              height={220}
+              yAxisLabel=""
+              yAxisSuffix=""
+              fromZero
+              chartConfig={{
+                backgroundGradientFrom: '#2e2e2e',
+                backgroundGradientTo: '#2e2e2e',
+                decimalPlaces: 0,
+                color: (o = 1) => `rgba(41,182,246,${o})`,
+                labelColor: () => '#bbbbbb',
+                barPercentage: 0.55,
+                propsForBackgroundLines: { stroke: '#444' },
+              }}
+              style={{ borderRadius: 12, marginTop: 8 }}
+              showValuesOnTopOfBars
+            />
+          </View>
+
+          <View style={{ height: 40 }} />
+        </ScrollView>
+      )}
+    </View>
+  );
 }
 
-const styles = StyleSheet.create({
-  content: { paddingHorizontal: 8, paddingBottom: 30 }, topBar: { alignItems: "center", flexDirection: "row", height: 64, justifyContent: "space-between" }, menu: { fontSize: 25, width: 40 }, title: { flex: 1, fontSize: 19, fontWeight: "800", textAlign: "center" }, headerIcon: { fontSize: 22, marginLeft: 8 }, search: { fontSize: 28, marginLeft: 8 }, filters: { alignItems: "center", flexDirection: "row", height: 64 }, filterFund: { flex: 1, fontSize: 15 }, filterMonth: { borderBottomWidth: 1, flex: 0.9, fontSize: 15, paddingBottom: 8, textAlign: "center" }, filterYear: { borderBottomWidth: 1, flex: 0.65, fontSize: 15, marginLeft: 8, paddingBottom: 8, textAlign: "center" }, arrow: { fontSize: 32, paddingHorizontal: 8 }, sectionBar: { alignItems: "center", borderRadius: 4, borderWidth: 1, flexDirection: "row", justifyContent: "space-between", minHeight: 42, paddingHorizontal: 10 }, sectionTitle: { fontSize: 15 }, chevron: { fontSize: 28 }, tableHeader: { alignItems: "center", borderBottomWidth: 1, flexDirection: "row", minHeight: 38, paddingHorizontal: 4 }, headerText: { fontSize: 10, fontWeight: "800" }, row: { alignItems: "center", borderBottomWidth: 1, flexDirection: "row", minHeight: 44, paddingHorizontal: 4 }, dateCell: { flex: 1.28, fontSize: 10 }, tickerCell: { flex: 1.05, fontSize: 12 }, kindCell: { flex: 1.35, fontSize: 10 }, quantityCell: { flex: 0.72, fontSize: 12, textAlign: "right" }, unitCell: { flex: 0.83, fontSize: 11, textAlign: "right" }, totalCell: { alignItems: "flex-end", flex: 0.95 }, totalText: { fontSize: 12, fontWeight: "800" }, actions: { flexDirection: "row", gap: 5, marginTop: 3 }, action: { fontSize: 7, fontWeight: "800" }, deleteAction: { color: "#F08080", fontSize: 7, fontWeight: "800" }, totalLine: { alignItems: "center", flexDirection: "row", justifyContent: "flex-end", minHeight: 46, paddingRight: 10 }, totalLineText: { fontSize: 14 }, info: { fontSize: 12, marginLeft: 5 }, note: { borderBottomWidth: 1, borderTopWidth: 1, paddingHorizontal: 4, paddingVertical: 10 }, noteText: { fontSize: 10, lineHeight: 16 }, historyBar: { marginTop: 14 }, chart: { flexDirection: "row", height: 300, paddingTop: 20 }, yAxis: { justifyContent: "space-between", paddingBottom: 28, width: 28 }, axisText: { fontSize: 10 }, chartColumns: { alignItems: "flex-end", borderTopColor: "rgba(255,255,255,0.06)", borderTopWidth: 1, flex: 1, flexDirection: "row", justifyContent: "space-around", paddingHorizontal: 6 }, barColumn: { alignItems: "center", justifyContent: "flex-end", height: 270, width: 40 }, barValue: { fontSize: 10, marginBottom: 5 }, bar: { borderRadius: 4, minHeight: 8, width: 32 }, barLabel: { fontSize: 10, fontWeight: "800", marginTop: 7 }, footer: { fontSize: 10, lineHeight: 15, marginTop: 16, textAlign: "center" },
+const st = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#212121' },
+  header: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingTop: 14, paddingBottom: 10, backgroundColor: '#1b1b1b',
+  },
+  headerTitulo: { color: '#fff', fontSize: 17, fontWeight: '600' },
+  headerIco: { color: '#fff', fontSize: 18 },
+
+  filtros: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 12, paddingVertical: 10,
+  },
+  dropdown: {
+    backgroundColor: '#2e2e2e', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8,
+  },
+  dropdownTxt: { color: '#fff', fontSize: 13, fontWeight: '500' },
+  seta: { paddingHorizontal: 4 },
+  setaTxt: { color: '#29B6F6', fontSize: 22, fontWeight: '700' },
+
+  mesesRow: { flexDirection: 'row', gap: 6, paddingHorizontal: 12, paddingBottom: 10 },
+  mesChip: {
+    backgroundColor: '#2e2e2e', borderRadius: 8, paddingHorizontal: 10,
+    paddingVertical: 6, alignItems: 'center', minWidth: 56,
+  },
+  mesChipSel: { backgroundColor: '#123c52', borderColor: '#29B6F6', borderWidth: 1 },
+  mesChipTxt: { color: '#bbb', fontSize: 12, fontWeight: '600' },
+  mesChipVal: { color: '#888', fontSize: 10, marginTop: 2 },
+  mesChipTxtSel: { color: '#29B6F6' },
+
+  loadingBox: { flex: 1, alignItems: 'center', justifyContent: 'center', minHeight: 200 },
+  loadingTxt: { color: '#bbb', marginTop: 12 },
+
+  card: {
+    backgroundColor: '#2e2e2e', marginHorizontal: 12, marginTop: 8,
+    borderRadius: 12, padding: 12,
+  },
+  cardTitulo: { color: '#fff', fontSize: 15, fontWeight: '600' },
+
+  linha: { flexDirection: 'row', alignItems: 'center', paddingVertical: 7, paddingHorizontal: 4, borderRadius: 6 },
+  linhaCab: { borderBottomWidth: 1, borderBottomColor: '#444' },
+  linhaAlt: { backgroundColor:'#292929' },
+  cabTxt: { color: '#999', fontSize: 11, fontWeight: '600' },
+  cel: { color: '#e8e8e8', fontSize: 12 },
+  cData: { width: 58 },
+  cAtivo: { flex: 1.1 },
+  cTipo: { flex: 1.2 },
+  cNum: { width: 52, textAlign: 'right' },
+
+  vazio: { color: '#888', textAlign: 'center', paddingVertical: 18 },
+
+  totalBox: {
+    marginTop: 10, backgroundColor: '#242424', borderRadius: 8,
+    padding: 10, borderLeftWidth: 3, borderLeftColor: '#29B6F6',
+  },
+  totalTxt: { color: '#29B6F6', fontSize: 14, fontWeight: '700' },
+  totalTxtSec: { color: '#bbb', fontSize: 12, marginTop: 3 },
+  legenda: { color: '#777', fontSize: 10, marginTop: 10, lineHeight: 14 },
 });
