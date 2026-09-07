@@ -3,34 +3,6 @@ import yfinance as yf
 
 app = Flask(__name__)
 
-@app.route('/api/proventos', methods=['GET'])
-def get_proventos():
-    ticker = request.args.get('ticker', '').upper().strip()
-    if not ticker:
-        return jsonify({'error': 'Ticker nao informado'}), 400
-
-    try:
-        simbolo = ticker if '.' in ticker else f"{ticker}.SA"
-        ativo = yf.Ticker(simbolo)
-        divs = ativo.dividends
-        
-        lista_divs = []
-        if divs is not None and not divs.empty:
-            for data, valor in divs.items():
-                # Converte o índice de data do pandas de forma segura para string YYYY-MM-DD
-                data_str = str(data).split('T')[0].split(' ')[0]
-                lista_divs.append({
-                    'ticker': ticker.replace('.SA', ''),
-                    'dataCom': data_str,
-                    'dataPagamento': data_str,
-                    'valorUnitario': float(valor),
-                    'tipo': 'Rendimento'
-                })
-        
-        return jsonify({'dividends': lista_divs})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
 @app.route('/api/proventos-lote', methods=['GET'])
 def get_proventos_lote():
     tickers_param = request.args.get('tickers', '').upper().strip()
@@ -43,22 +15,28 @@ def get_proventos_lote():
     for ticker in lista_tickers:
         lista_divs = []
         try:
+            # Garante o sufixo .SA para ativos da B3
             simbolo = ticker if '.' in ticker else f"{ticker}.SA"
             ativo = yf.Ticker(simbolo)
-            divs = ativo.dividends
             
-            if divs is not None and not divs.empty:
-                for data, valor in divs.items():
-                    data_str = str(data).split('T')[0].split(' ')[0]
-                    lista_divs.append({
-                        'ticker': ticker.replace('.SA', ''),
-                        'dataCom': data_str,
-                        'dataPagamento': data_str,
-                        'valorUnitario': float(valor),
-                        'tipo': 'Rendimento'
-                    })
+            # Obtém a tabela oficial de dividendos e desdobramentos reais
+            acoes = ativo.get_actions()
+            
+            if acoes is not None and not acoes.empty:
+                # Filtra apenas onde houve pagamento de dividendos/rendimentos
+                if "Dividends" in acoes.columns:
+                    divs = acoes[acoes["Dividends"] > 0]
+                    for data, row in divs.iterrows():
+                        data_str = str(data).split('T')[0].split(' ')[0]
+                        lista_divs.append({
+                            'ticker': ticker.replace('.SA', ''),
+                            'dataCom': data_str,
+                            'dataPagamento': data_str,
+                            'valorUnitario': float(row["Dividends"]),
+                            'tipo': 'Rendimento'
+                        })
         except Exception as e:
-            print(f"Erro ao buscar {ticker}: {e}")
+            print(f"Erro ao buscar dividendos reais para {ticker}: {e}")
         
         resultado_geral[ticker.replace('.SA', '')] = lista_divs
 
