@@ -1,47 +1,38 @@
-from flask import Flask, jsonify, request
-import yfinance as yf
-
-app = Flask(__name__)
-
-@app.route('/', methods=['GET'])
-def home():
-    return jsonify({'status': 'API Rodando com sucesso', 'rotas': ['/api/proventos-lote']})
-
+# Trecho atualizado para a rota Flask na Render (app.py)
 @app.route('/api/proventos-lote', methods=['GET'])
 def get_proventos_lote():
-    tickers_param = request.args.get('tickers', '').upper().strip()
-    if not tickers_param:
-        return jsonify({'error': 'Nenhum ticker informado'}), 400
-
-    lista_tickers = [t.strip() for t in tickers_param.split(',') if t.strip()]
-    resultado_geral = {}
-
-    for ticker in lista_tickers:
-        lista_divs = []
+    tickers_param = request.args.get('tickers', '')
+    tickers = [t.strip().upper() for t in tickers_param.split(',') if t.strip()]
+    
+    all_dividends = []
+    
+    for ticker_name in tickers:
         try:
-            simbolo = ticker if '.' in ticker else f"{ticker}.SA"
-            ativo = yf.Ticker(simbolo)
+            ticker_obj = yf.Ticker(ticker_name)
+            dividends_history = ticker_obj.dividends
             
-            acoes = ativo.get_actions()
-            
-            if acoes is not None and not acoes.empty:
-                if "Dividends" in acoes.columns:
-                    divs = acoes[acoes["Dividends"] > 0]
-                    for data, row in divs.iterrows():
-                        data_str = str(data).split('T')[0].split(' ')[0]
-                        lista_divs.append({
-                            'ticker': ticker.replace('.SA', ''),
-                            'dataCom': data_str,
-                            'dataPagamento': data_str,
-                            'valorUnitario': float(row["Dividends"]),
-                            'tipo': 'Rendimento'
+            if dividends_history is not None and not dividends_history.empty:
+                dividends_df = dividends_history.reset_index()
+                # Identifica dinamicamente o nome da coluna de data (pode variar dependendo da versão do yfinance/pandas)
+                date_col = 'Date' if 'Date' in dividends_df.columns else dividends_df.columns[0]
+                val_col = 'Dividends' if 'Dividends' in dividends_df.columns else dividends_df.columns[1]
+                
+                dividends_df[date_col] = pd.to_datetime(dividends_df[date_col])
+                
+                # Ordena do mais antigo para o mais recente (ou vice-versa conforme sua preferência)
+                dividends_df = dividends_df.sort_values(by=date_col, ascending=True)
+                
+                for _, row in dividends_df.iterrows():
+                    d_val = float(row[val_col])
+                    if d_val > 0:  # Ignora valores zerados
+                        all_dividends.append({
+                            'ticker': ticker_name,
+                            'dataCom': row[date_col].strftime('%Y-%m-%d'),
+                            'dataPagamento': row[date_col].strftime('%Y-%m-%d'),
+                            'tipo': 'Rendimento',
+                            'valorUnitario': round(d_val, 4)
                         })
         except Exception as e:
-            print(f"Erro ao buscar dividendos reais para {ticker}: {e}")
-        
-        resultado_geral[ticker.replace('.SA', '')] = lista_divs
-
-    return jsonify({'dividends': resultado_geral})
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+            print(f"Erro ao buscar proventos para {ticker_name}: {e}")
+            
+    return jsonify({"dividends": all_dividends}), 200

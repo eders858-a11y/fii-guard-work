@@ -1,7 +1,7 @@
 import { router } from "expo-router";
 import { FlatList, Pressable, StyleSheet, Text, View, Dimensions } from "react-native";
-import Svg, { G, Path, Circle, Text as SvgText, Rect } from "react-native-svg";
-import { useMemo } from "react";
+import Svg, { G, Path, Circle, Text as SvgText } from "react-native-svg";
+import React, { useMemo } from "react";
 import { usePortfolio } from "@/lib/portfolio";
 import { findFund } from "@/lib/fii-catalog";
 import { ScreenContainer } from "@/components/screen-container";
@@ -10,7 +10,6 @@ import { currency, number } from "@/lib/format";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
 
-// Cores vivas e contrastantes que se sobrepõem perfeitamente ao fundo escuro (sem tons cinzas apagados)
 const CHART_COLORS = [
   "#FF5252", "#00E5FF", "#FFD700", "#26D39A", "#FF7043",
   "#AB47BC", "#29B6F6", "#FFEE58", "#66BB6A", "#EC407A",
@@ -43,10 +42,10 @@ function describeArc(x: number, y: number, radius: number, startAngle: number, e
 
 function ChartCard({ title, slices, total }: { title: string; slices: Slice[]; total: number }) {
   const cardWidth = SCREEN_WIDTH - 40;
-  const chartHeight = 190; // Compactado para abrir espaço para as legendas em grid horizontal abaixo
+  const chartHeight = 210;
   const centerX = cardWidth / 2;
-  const centerY = chartHeight / 2 + 5;
-  const radius = 58;
+  const centerY = chartHeight / 2 - 15;
+  const radius = 60;
 
   let cumulativeAngle = 0;
 
@@ -63,12 +62,29 @@ function ChartCard({ title, slices, total }: { title: string; slices: Slice[]; t
 
       const color = CHART_COLORS[index % CHART_COLORS.length];
 
+      const radians = ((midAngle - 90) * Math.PI) / 180;
+      const outerRadius = radius + 15;
+
+      const x1 = centerX + radius * Math.cos(radians);
+      const y1 = centerY + radius * Math.sin(radians);
+      const x2 = centerX + outerRadius * Math.cos(radians);
+      const y2 = centerY + outerRadius * Math.sin(radians);
+
+      const isRight = Math.cos(radians) >= 0;
+      const x3 = isRight ? x2 + 22 : x2 - 22;
+      const y3 = y2;
+      const textAnchor = isRight ? "start" : "end";
+
       return {
         ...slice,
         percentage,
         startAngle,
         endAngle,
         color,
+        linePoints: `${x1},${y1} ${x2},${y2} ${x3},${y3}`,
+        textX: isRight ? x3 + 5 : x3 - 5,
+        textY: y3 + 4,
+        textAnchor,
       };
     });
   }, [slices, total]);
@@ -85,20 +101,37 @@ function ChartCard({ title, slices, total }: { title: string; slices: Slice[]; t
               const pathData = describeArc(centerX, centerY, radius, slice.startAngle, slice.endAngle);
 
               return (
-                <Path
-                  key={`slice-${index}`}
-                  d={pathData}
-                  fill={slice.color}
-                  stroke="#17232C"
-                  strokeWidth={1.5}
-                />
+                <React.Fragment key={`slice-group-${index}`}>
+                  <Path
+                    d={pathData}
+                    fill={slice.color}
+                    stroke="#17232C"
+                    strokeWidth={2}
+                  />
+                  <Path
+                    d={`M ${slice.linePoints}`}
+                    stroke={slice.color}
+                    strokeWidth={1.5}
+                    fill="none"
+                  />
+                  <Circle cx={slice.linePoints.split(' ')[0].split(',')[0]} cy={slice.linePoints.split(' ')[0].split(',')[1]} r={2} fill={slice.color} />
+                  <SvgText
+                    x={slice.textX}
+                    y={slice.textY}
+                    fill="#FFFFFF"
+                    fontSize="10"
+                    fontWeight="800"
+                    textAnchor={slice.textAnchor}
+                  >
+                    {`${slice.label} (${slice.percentage.toFixed(0)}%)`}
+                  </SvgText>
+                </React.Fragment>
               );
             })}
           </G>
         </Svg>
       </View>
 
-      {/* Legendas organizadas em blocos compactos lado a lado (estilo Donut com tags horizontais) */}
       <View style={styles.legendGrid}>
         {slicesData.map((slice, index) => {
           if (slice.percentage <= 0) return null;
@@ -157,12 +190,11 @@ function getNormalizedCategory(ticker: string, field: "sector" | "segment", rawV
   if (field === "sector") {
     if (isDevelopment || isBrick || rawText.includes("TIJOLO")) return "Tijolo";
     if (isPaper || rawText.includes("PAPEL")) return "Papel";
-
     if (rawValue && rawValue !== "Outros" && rawValue.trim() !== "") {
       if (rawValue.toUpperCase().includes("PAPEL") || rawValue.toUpperCase().includes("RECEBÍVEL")) return "Papel";
       return "Tijolo";
     }
-    return "Tijolo";
+    return "Papel";
   }
 
   if (field === "segment") {
@@ -306,15 +338,13 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   cardTitle: { color: "#FFFFFF", fontSize: 18, fontWeight: "700", marginBottom: 8 },
-  pieContainer: { alignItems: "center", justifyContent: "center", marginVertical: 2 },
-
-  // Grid horizontal compacta para acomodar até 20 ativos perfeitamente embaixo do gráfico
+  pieContainer: { alignItems: "center", justifyContent: "center", marginVertical: 4, height: 210 },
   legendGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
     justifyContent: "flex-start",
     gap: 6,
-    marginTop: 10,
+    marginTop: 8,
     marginBottom: 4,
   },
   legendItem: {
@@ -346,18 +376,16 @@ const styles = StyleSheet.create({
     color: "#00E5FF",
     fontWeight: "800",
   },
-
   pieTotal: {
     alignItems: "center",
     borderTopColor: "#293943",
     borderTopWidth: 1,
-    marginTop: 12,
-    paddingTop: 12,
+    marginTop: 10,
+    paddingTop: 10,
   },
   centerLabel: { color: "#00E5FF", fontSize: 12, fontWeight: "600" },
   centerValue: { color: "#FFFFFF", fontSize: 20, fontWeight: "800", marginTop: 2 },
   sectionTitle: { color: "#FFFFFF", fontSize: 22, fontWeight: "800", marginBottom: 15, marginTop: 32 },
-
   assetRow: {
     backgroundColor: "#17232C",
     borderRadius: 12,
@@ -373,7 +401,6 @@ const styles = StyleSheet.create({
   assetLeft: { flex: 1, flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 8 },
   assetRight: { alignItems: "flex-end", justifyContent: "center", minWidth: 90 },
   ticker: { color: "#FFFFFF", fontSize: 14, fontWeight: "800" },
-
   sub: { color: "#FFD700", fontSize: 10, fontWeight: "700" },
   sector: { color: "#00E5FF", fontSize: 10, fontWeight: "700" },
   market: { color: "#FFFFFF", fontSize: 14, fontWeight: "800" },
