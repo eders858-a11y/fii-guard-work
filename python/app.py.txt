@@ -3,6 +3,10 @@ import yfinance as yf
 
 app = Flask(__name__)
 
+@app.route('/', methods=['GET'])
+def home():
+    return jsonify({'status': 'API Rodando com sucesso', 'rotas': ['/api/proventos-lote']})
+
 @app.route('/api/proventos-lote', methods=['GET'])
 def get_proventos_lote():
     tickers_param = request.args.get('tickers', '').upper().strip()
