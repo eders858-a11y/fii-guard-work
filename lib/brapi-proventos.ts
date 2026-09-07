@@ -9,30 +9,33 @@ export interface ProventoBrapi {
   estimado?: boolean;
 }
 
-// Função unificada: Tenta o servidor Python (Flask local ou nuvem) e usa a Brapi de fallback
 export async function fetchProventosCarteira(
   tickers: string[],
   onProgress?: (done: number, total: number) => void,
   force: boolean = false
 ): Promise<Record<string, ProventoBrapi[]>> {
+  console.log("==> TICKERS RECEBIDOS:", tickers);
   const resultado: Record<string, ProventoBrapi[]> = {};
   const baseUrl = getApiUrl();
+  console.log("==> BASE URL:", baseUrl);
 
   try {
     const tickersParam = tickers.join(',');
+    console.log(`==> REQUISITANDO: ${baseUrl}/api/proventos-lote?tickers=${tickersParam}`);
     const response = await fetch(`${baseUrl}/api/proventos-lote?tickers=${tickersParam}`);
+    console.log("==> STATUS RESPOSTA:", response.status);
 
     if (response.ok) {
       const data = await response.json();
+      console.log("==> DADOS RECEBIDOS DA API:", data);
       if (data && data.dividends) {
         return data.dividends;
       }
     }
   } catch (error) {
-    console.log('Servidor Python indisponível, usando fallback da Brapi...', error);
+    console.log('Erro capturado no fetch de proventos, usando fallback...', error);
   }
 
-  // Fallback ativo caso o Python falhe
   let done = 0;
   for (const ticker of tickers) {
     try {

@@ -1,7 +1,7 @@
 import { router } from "expo-router";
 import { FlatList, Pressable, StyleSheet, Text, View, Dimensions } from "react-native";
-import Svg, { G, Path, Circle } from "react-native-svg";
-import { useMemo, useEffect } from "react";
+import Svg, { G, Path, Circle, Text as SvgText, Rect } from "react-native-svg";
+import { useMemo } from "react";
 import { usePortfolio } from "@/lib/portfolio";
 import { findFund } from "@/lib/fii-catalog";
 import { ScreenContainer } from "@/components/screen-container";
@@ -10,11 +10,12 @@ import { currency, number } from "@/lib/format";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
 
+// Cores vivas e contrastantes que se sobrepõem perfeitamente ao fundo escuro (sem tons cinzas apagados)
 const CHART_COLORS = [
-  "#C8504B", "#2A3B4C", "#56888A", "#D17F61", "#80B3A2",
-  "#538165", "#C87C1E", "#B19992", "#66717E", "#5B6C7C",
-  "#A3AEB5", "#899980", "#29404E", "#D86B5A", "#9BB8A9",
-  "#395E66", "#D39E82", "#A26769", "#6B8E23", "#4682B4"
+  "#FF5252", "#00E5FF", "#FFD700", "#26D39A", "#FF7043",
+  "#AB47BC", "#29B6F6", "#FFEE58", "#66BB6A", "#EC407A",
+  "#7E57C2", "#26A69A", "#FFA726", "#42A5F5", "#9CCC65",
+  "#CA4040", "#00B0FF", "#FFCA28", "#00C853", "#F06292"
 ];
 
 type Slice = { label: string; value: number };
@@ -42,10 +43,10 @@ function describeArc(x: number, y: number, radius: number, startAngle: number, e
 
 function ChartCard({ title, slices, total }: { title: string; slices: Slice[]; total: number }) {
   const cardWidth = SCREEN_WIDTH - 40;
-  const chartHeight = 220;
+  const chartHeight = 190; // Compactado para abrir espaço para as legendas em grid horizontal abaixo
   const centerX = cardWidth / 2;
-  const centerY = chartHeight / 2;
-  const radius = 75;
+  const centerY = chartHeight / 2 + 5;
+  const radius = 58;
 
   let cumulativeAngle = 0;
 
@@ -97,13 +98,14 @@ function ChartCard({ title, slices, total }: { title: string; slices: Slice[]; t
         </Svg>
       </View>
 
-      <View style={styles.legendContainer}>
+      {/* Legendas organizadas em blocos compactos lado a lado (estilo Donut com tags horizontais) */}
+      <View style={styles.legendGrid}>
         {slicesData.map((slice, index) => {
           if (slice.percentage <= 0) return null;
           return (
             <View key={`legend-${index}`} style={styles.legendItem}>
               <View style={[styles.legendColorBox, { backgroundColor: slice.color }]} />
-              <Text style={styles.legendText}>
+              <Text style={styles.legendText} numberOfLines={1}>
                 {slice.label} <Text style={styles.legendPct}>{slice.percentage.toFixed(0)}%</Text>
               </Text>
             </View>
@@ -119,7 +121,6 @@ function ChartCard({ title, slices, total }: { title: string; slices: Slice[]; t
   );
 }
 
-// Motor universal e inteligente para classificar qualquer FII atual ou futuro sem cair em "Outros"
 function getNormalizedCategory(ticker: string, field: "sector" | "segment", rawValue?: string): string {
   const upperTicker = ticker.toUpperCase();
   const rawText = `${rawValue || ""}`.toUpperCase();
@@ -183,56 +184,19 @@ function getNormalizedCategory(ticker: string, field: "sector" | "segment", rawV
   return rawValue || "Outros";
 }
 
-// Função auxiliar para buscar cotações online (via brapi)
-async function fetchLiveQuotes(tickers: string[]): Promise<Record<string, number>> {
-  if (tickers.length === 0) return {};
-  try {
-    const symbols = tickers.map(t => `${t}.SA`).join(",");
-    const response = await fetch(`https://brapi.dev/api/quote/${symbols}`);
-    const data = await response.json();
-    const quotes: Record<string, number> = {};
-    if (data && data.results) {
-      data.results.forEach((item: any) => {
-        if (item.symbol && typeof item.regularMarketPrice === "number") {
-          const cleanTicker = item.symbol.replace(".SA", "").toUpperCase();
-          quotes[cleanTicker] = item.regularMarketPrice;
-        }
-      });
-    }
-    return quotes;
-  } catch (error) {
-    console.error("Erro ao atualizar cotações online:", error);
-    return {};
-  }
-}
-
 export default function PortfolioScreen() {
-  const { ready, snapshot, updatePrices } = usePortfolio() as any;
+  const { ready, snapshot } = usePortfolio();
   const positions = snapshot.active;
-
-  // Atualiza as cotações automaticamente ao carregar a tela inicial
-  useEffect(() => {
-    async function loadQuotes() {
-      if (!positions || positions.length === 0) return;
-      const tickers = positions.map((p: any) => p.ticker);
-      const livePrices = await fetchLiveQuotes(tickers);
-      if (typeof updatePrices === "function" && Object.keys(livePrices).length > 0) {
-        updatePrices(livePrices);
-      }
-    }
-    loadQuotes();
-  }, [positions.length]);
-
-  const total = positions.reduce((sum: number, item: any) => sum + (item.marketValue ?? item.costBasis), 0);
+  const total = positions.reduce((sum, item) => sum + (item.marketValue ?? item.costBasis), 0);
 
   const assetSlices = useMemo(() =>
-    positions.map((item: any) => ({ label: item.ticker, value: item.marketValue ?? item.costBasis }))
+    positions.map((item) => ({ label: item.ticker, value: item.marketValue ?? item.costBasis }))
       .sort((a, b) => b.value - a.value),
   [positions]);
 
   const groupSlices = (field: "sector" | "segment") => {
     const map = new Map<string, number>();
-    positions.forEach((item: any) => {
+    positions.forEach((item) => {
       const fund = findFund(item.ticker);
       const rawValue = field === "sector" ? fund?.sector : fund?.segment;
       const label = getNormalizedCategory(item.ticker, field, rawValue);
@@ -260,24 +224,23 @@ export default function PortfolioScreen() {
                 <View style={styles.brandIcon}>
                   <Text style={styles.brandGlyph}>▥</Text>
                 </View>
-                <Text style={styles.brandTitle}>Carteira FIIs</Text>
+                <Text style={styles.brandTitle}>Meus Ativos</Text>
               </View>
               <Pressable onPress={() => router.push("/settings" as any)}>
-                <Text style={styles.exit}>Ajustes</Text>
+                <Text style={styles.exit}>⚙</Text>
               </Pressable>
             </View>
             <ChartCard title="Peso por ativo" slices={assetSlices} total={total} />
             <ChartCard title="Peso por setor" slices={sectorSlices} total={total} />
             <ChartCard title="Peso por segmento" slices={segmentSlices} total={total} />
-            <Text style={styles.sectionTitle}>Meus Ativos</Text>
+            <Text style={styles.sectionTitle}>Ativos</Text>
           </View>
         }
         renderItem={({ item }) => {
           const fund = findFund(item.ticker);
-          const sector = getNormalizedCategory(item.ticker, "sector", fund?.sector);
-
-          // Calcula a cotação unitária atual baseada no valor de mercado atualizado ou preço médio
-          const currentUnitPrice = item.quantity > 0 ? (item.marketValue ?? item.costBasis) / item.quantity : item.averagePrice;
+          const segment = getNormalizedCategory(item.ticker, "segment", fund?.segment);
+          const currentPrice = item.lastPrice ?? item.averagePrice;
+          const isLoss = item.unrealizedResult !== undefined && item.unrealizedResult < 0;
 
           return (
             <Pressable
@@ -287,15 +250,15 @@ export default function PortfolioScreen() {
               <View style={styles.assetLeft}>
                 <Text style={styles.ticker}>{item.ticker}</Text>
                 <Text style={styles.sub}>
-                  {number(item.quantity, 0)} cotas · PM {currency(item.averagePrice)} · Cot. {currency(currentUnitPrice)}
+                  {number(item.quantity, 0)} cotas · PM {currency(item.averagePrice)} · Cot. {currency(currentPrice)}
                 </Text>
-                <Text style={item.unrealizedResult !== undefined && item.unrealizedResult < 0 ? styles.loss : styles.gain}>
-                  {item.unrealizedResult !== undefined && item.unrealizedResult < 0 ? "▼" : "▲"} {currency(item.unrealizedResult, { sign: true })}
+                <Text style={isLoss ? styles.loss : styles.gain}>
+                  {isLoss ? "▼ " : "▲ +"}{currency(item.unrealizedResult, { sign: true })}
                 </Text>
               </View>
               <View style={styles.assetRight}>
                 <Text style={styles.market}>{currency(item.marketValue ?? item.costBasis)}</Text>
-                <Text style={styles.sector}>{sector}</Text>
+                <Text style={styles.sector}>{segment}</Text>
               </View>
             </Pressable>
           );
@@ -332,82 +295,89 @@ const styles = StyleSheet.create({
     width: 48,
   },
   brandGlyph: { color: "#26D39A", fontSize: 25 },
-  brandTitle: { color: "#F4F7F8", fontSize: 22, fontWeight: "800" },
-  exit: { color: "#9AA7AF", fontSize: 16, fontWeight: "600" },
+  brandTitle: { color: "#FFFFFF", fontSize: 22, fontWeight: "800" },
+  exit: { color: "#00E5FF", fontSize: 22 },
   card: {
     backgroundColor: "#17232C",
     borderColor: "#293943",
     borderRadius: 24,
     borderWidth: 1,
     marginTop: 18,
-    padding: 20,
+    padding: 16,
   },
-  cardTitle: { color: "#F4F7F8", fontSize: 18, fontWeight: "700", marginBottom: 12 },
-  pieContainer: { alignItems: "center", justifyContent: "center", marginVertical: 4 },
+  cardTitle: { color: "#FFFFFF", fontSize: 18, fontWeight: "700", marginBottom: 8 },
+  pieContainer: { alignItems: "center", justifyContent: "center", marginVertical: 2 },
 
-  legendContainer: {
+  // Grid horizontal compacta para acomodar até 20 ativos perfeitamente embaixo do gráfico
+  legendGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    justifyContent: "flex-end",
-    gap: 8,
-    marginTop: 14,
-    paddingHorizontal: 4,
+    justifyContent: "flex-start",
+    gap: 6,
+    marginTop: 10,
+    marginBottom: 4,
   },
   legendItem: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
-    backgroundColor: "#101920",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    backgroundColor: "#0F181F",
     borderRadius: 6,
-    borderColor: "#293943",
+    paddingHorizontal: 6,
+    paddingVertical: 4,
     borderWidth: 1,
+    borderColor: "#293943",
+    minWidth: '22%',
+    maxWidth: '31%',
+    flexGrow: 1,
   },
   legendColorBox: {
-    width: 10,
-    height: 10,
+    width: 8,
+    height: 8,
     borderRadius: 2,
+    marginRight: 4,
   },
   legendText: {
-    color: "#D0D7DE",
-    fontSize: 11,
-    fontWeight: "600",
+    color: "#FFFFFF",
+    fontSize: 10,
+    fontWeight: "700",
+    flexShrink: 1,
   },
   legendPct: {
-    color: "#84939C",
-    fontWeight: "400",
+    color: "#00E5FF",
+    fontWeight: "800",
   },
 
   pieTotal: {
     alignItems: "center",
     borderTopColor: "#293943",
     borderTopWidth: 1,
-    marginTop: 16,
-    paddingTop: 16,
+    marginTop: 12,
+    paddingTop: 12,
   },
-  centerLabel: { color: "#87949D", fontSize: 14, fontWeight: "500" },
-  centerValue: { color: "#F5F7F8", fontSize: 22, fontWeight: "800", marginTop: 4 },
-  sectionTitle: { color: "#F4F7F8", fontSize: 22, fontWeight: "800", marginBottom: 15, marginTop: 32 },
+  centerLabel: { color: "#00E5FF", fontSize: 12, fontWeight: "600" },
+  centerValue: { color: "#FFFFFF", fontSize: 20, fontWeight: "800", marginTop: 2 },
+  sectionTitle: { color: "#FFFFFF", fontSize: 22, fontWeight: "800", marginBottom: 15, marginTop: 32 },
 
   assetRow: {
     backgroundColor: "#17232C",
-    borderRadius: 16,
+    borderRadius: 12,
     flexDirection: "row",
+    alignItems: "center",
     justifyContent: "space-between",
-    marginBottom: 12,
-    padding: 16,
+    marginBottom: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
     borderColor: "#293943",
     borderWidth: 1,
   },
-  assetLeft: { flex: 1 },
-  assetRight: { alignItems: "flex-end", justifyContent: "center" },
-  ticker: { color: "#EEF4F5", fontSize: 18, fontWeight: "800" },
+  assetLeft: { flex: 1, flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 8 },
+  assetRight: { alignItems: "flex-end", justifyContent: "center", minWidth: 90 },
+  ticker: { color: "#FFFFFF", fontSize: 14, fontWeight: "800" },
 
-  sub: { color: "#9AA7AF", fontSize: 13, marginTop: 4, fontWeight: "500" },
-  sector: { color: "#84939C", fontSize: 13, marginTop: 4, fontWeight: "500" },
-  market: { color: "#F4F7F8", fontSize: 17, fontWeight: "800" },
-  gain: { color: "#26D39A", fontSize: 13, fontWeight: "700", marginTop: 4 },
-  loss: { color: "#FF6B78", fontSize: 13, fontWeight: "700", marginTop: 4 },
+  sub: { color: "#FFD700", fontSize: 10, fontWeight: "700" },
+  sector: { color: "#00E5FF", fontSize: 10, fontWeight: "700" },
+  market: { color: "#FFFFFF", fontSize: 14, fontWeight: "800" },
+  gain: { color: "#26D39A", fontSize: 10, fontWeight: "700" },
+  loss: { color: "#FF5252", fontSize: 10, fontWeight: "700" },
   pressed: { opacity: 0.7 },
 });

@@ -15,11 +15,12 @@ def get_proventos():
         divs = ativo.dividends
         
         lista_divs = []
-        if not divs.empty:
+        if divs is not None and not divs.empty:
             for data, valor in divs.items():
-                data_str = data.strftime('%Y-%m-%d')
+                # Converte o índice de data do pandas de forma segura para string YYYY-MM-DD
+                data_str = str(data).split('T')[0].split(' ')[0]
                 lista_divs.append({
-                    'ticker': ticker,
+                    'ticker': ticker.replace('.SA', ''),
                     'dataCom': data_str,
                     'dataPagamento': data_str,
                     'valorUnitario': float(valor),
@@ -37,26 +38,29 @@ def get_proventos_lote():
         return jsonify({'error': 'Nenhum ticker informado'}), 400
 
     lista_tickers = [t.strip() for t in tickers_param.split(',') if t.strip()]
-    resultado_geral = []
+    resultado_geral = {}
 
     for ticker in lista_tickers:
+        lista_divs = []
         try:
             simbolo = ticker if '.' in ticker else f"{ticker}.SA"
             ativo = yf.Ticker(simbolo)
             divs = ativo.dividends
             
-            if not divs.empty:
+            if divs is not None and not divs.empty:
                 for data, valor in divs.items():
-                    data_str = data.strftime('%Y-%m-%d')
-                    resultado_geral.append({
-                        'ticker': ticker,
+                    data_str = str(data).split('T')[0].split(' ')[0]
+                    lista_divs.append({
+                        'ticker': ticker.replace('.SA', ''),
                         'dataCom': data_str,
                         'dataPagamento': data_str,
                         'valorUnitario': float(valor),
                         'tipo': 'Rendimento'
                     })
-        except Exception:
-            continue
+        except Exception as e:
+            print(f"Erro ao buscar {ticker}: {e}")
+        
+        resultado_geral[ticker.replace('.SA', '')] = lista_divs
 
     return jsonify({'dividends': resultado_geral})
 
