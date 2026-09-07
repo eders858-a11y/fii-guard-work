@@ -15,15 +15,12 @@ def get_proventos_lote():
     for ticker in lista_tickers:
         lista_divs = []
         try:
-            # Garante o sufixo .SA para ativos da B3
             simbolo = ticker if '.' in ticker else f"{ticker}.SA"
             ativo = yf.Ticker(simbolo)
             
-            # Obtém a tabela oficial de dividendos e desdobramentos reais
             acoes = ativo.get_actions()
             
             if acoes is not None and not acoes.empty:
-                # Filtra apenas onde houve pagamento de dividendos/rendimentos
                 if "Dividends" in acoes.columns:
                     divs = acoes[acoes["Dividends"] > 0]
                     for data, row in divs.iterrows():
