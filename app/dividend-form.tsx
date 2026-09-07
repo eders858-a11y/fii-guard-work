@@ -1,6 +1,6 @@
 import { router, Stack, useLocalSearchParams } from "expo-router";
-import { ScrollView, Text, View } from "react-native";
-import { useState } from "react";
+import { ScrollView, Text, View, Pressable, ActivityIndicator } from "react-native";
+import { useState, useEffect } from "react";
 import { usePortfolio } from "@/lib/portfolio";
 import { suggestFunds } from "@/lib/fii-catalog";
 import { ScreenContainer } from "@/components/screen-container";
@@ -30,7 +30,43 @@ export default function DividendForm() {
   const [amount, setAmount] = useState(old ? currencyInput(String(Math.round(old.amountPerShare * 100))) : "");
   const [note, setNote] = useState(old?.note ?? "");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
   const selected = suggestFunds(ticker);
+
+  // Busca dados da API quando o ticker tiver 6 caracteres
+  useEffect(() => {
+    const cleanTicker = ticker.trim().toUpperCase();
+    if (old || cleanTicker.length !== 6) return;
+
+    let isMounted = true;
+    const fetchDividendData = async () => {
+      try {
+        setLoading(true);
+        // Substitua pelo endpoint real da sua API de dividendos
+        const res = await fetch(`https://api.exemplo.com/fii/${cleanTicker}/latest-dividend`);
+        if (!res.ok) return;
+
+        const data = await res.json();
+        if (isMounted && data) {
+          if (data.paymentDate) setPaymentDate(isoDateToBr(data.paymentDate));
+          if (data.dateCom) setDateCom(isoDateToBr(data.dateCom));
+          if (data.amountPerShare) {
+            setAmount(currencyInput(String(Math.round(data.amountPerShare * 100))));
+          }
+        }
+      } catch {
+        // Em caso de falha na requisição, permite o preenchimento manual
+      } finally {
+        if (isMounted) setLoading(false);
+      }
+    };
+
+    const timer = setTimeout(fetchDividendData, 400);
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
+  }, [ticker, old]);
 
   const save = () => {
     try {
@@ -88,13 +124,18 @@ export default function DividendForm() {
             placeholder="Ex.: HGLG11"
             autoCapitalize="characters"
           />
+          {loading ? (
+            <View className="-mt-2 mb-3 flex-row items-center gap-2 px-1">
+              <ActivityIndicator size="small" />
+              <Text className="text-xs text-muted">Buscando dados na API...</Text>
+            </View>
+          ) : null}
           {selected.slice(0, 4).map((fund) => (
-            <Text
-              key={fund.ticker}
-              className="-mt-2 mb-3 rounded-xl bg-[#DFF4FA] p-3 text-xs text-foreground"
-            >
-              {fund.ticker} · {fund.name}
-            </Text>
+            <Pressable key={fund.ticker} onPress={() => setTicker(fund.ticker)}>
+              <Text className="-mt-2 mb-3 rounded-xl bg-[#DFF4FA] p-3 text-xs text-foreground">
+                {fund.ticker} · {fund.name}
+              </Text>
+            </Pressable>
           ))}
           <Field
             label="Data de pagamento"

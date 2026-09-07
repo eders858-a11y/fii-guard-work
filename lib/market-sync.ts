@@ -1,4 +1,5 @@
 import { NewDividend, Quote, normalizeTicker } from "./portfolio";
+import { BRAPI_TOKEN } from "./brapi-proventos";
 
 export type SyncResult = { quotes: Quote[]; dividends: NewDividend[]; message: string };
 
@@ -9,10 +10,17 @@ type YahooChart = {
 const yahooTicker = (ticker: string) => `${normalizeTicker(ticker)}.SA`;
 const isoDay = (timestamp: number) => new Date(timestamp * 1000).toISOString().slice(0, 10);
 
-async function syncBrapi(tickers: string[], since?: string): Promise<SyncResult> {
+async function syncBrapi(tickers: string[], since?: string, explicitToken?: string): Promise<SyncResult> {
+  const token = explicitToken || (BRAPI_TOKEN && !BRAPI_TOKEN.startsWith("SEU_TOKEN") ? BRAPI_TOKEN : "");
   const results = await Promise.all(tickers.map(async (ticker) => {
     try {
-      const [quoteResponse, dividendsResponse] = await Promise.all([fetch(`https://brapi.dev/api/quote/${encodeURIComponent(ticker)}`), fetch(`https://brapi.dev/api/v2/fii/dividends?symbols=${encodeURIComponent(ticker)}`)]);
+      const quoteUrl = `https://brapi.dev/api/quote/${encodeURIComponent(ticker)}${token ? `?token=${token}` : ""}`;
+      const divUrl = `https://brapi.dev/api/v2/fii/dividends?symbols=${encodeURIComponent(ticker)}${token ? `&token=${token}` : ""}`;
+
+      const [quoteResponse, dividendsResponse] = await Promise.all([
+        fetch(quoteUrl),
+        fetch(divUrl)
+      ]);
       if (!quoteResponse.ok || !dividendsResponse.ok) throw new Error("BRAPI indisponível para este ativo.");
       const quoteBody = await quoteResponse.json() as { results?: Array<{ regularMarketPrice?: number; regularMarketTime?: number | string }> };
       const quoteItem = quoteBody.results?.[0];
@@ -56,9 +64,9 @@ async function syncYahoo(tickers: string[], since?: string): Promise<SyncResult>
   return { quotes, dividends, message: `${quotes.length} cotações e ${dividends.length} proventos consultados automaticamente${failures.length ? `. Falhas: ${failures.join(", ")}` : "."}` };
 }
 
-export async function syncMarket(serviceUrl: string | undefined, tickers: string[], since?: string): Promise<SyncResult> {
+export async function syncMarket(serviceUrl: string | undefined, tickers: string[], since?: string, brapiToken?: string): Promise<SyncResult> {
   const base = serviceUrl?.trim().replace(/\/$/, "");
-  if (!base) { try { return await syncBrapi(tickers, since); } catch { return syncYahoo(tickers, since); } }
+  if (!base) { try { return await syncBrapi(tickers, since, brapiToken); } catch { return syncYahoo(tickers, since); } }
   if (!/^https?:\/\//i.test(base)) throw new Error("O endereço do serviço deve iniciar por http:// ou https://.");
   const params = new URLSearchParams({ symbols: tickers.join(",") });
   if (since) params.set("since", since);

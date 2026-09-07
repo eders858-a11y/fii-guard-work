@@ -2,7 +2,7 @@ import { ProventoBrapi, mesAnoKey } from './brapi-proventos';
 
 export interface MovimentacaoB3 {
   ticker: string;            // ex.: 'HGLG11'
-  data: string;              // 'YYYY-MM-DD' ou 'DD/MM/YYYY'
+  data: string;              // 'YYYY-MM-DD' ou 'DD/MM/YYYY' ou 'DD-MM-YYYY'
   tipo: 'C' | 'V' | string;  // 'C' compra, 'V' venda (ou 'Compra'/'Venda')
   quantidade: number;
 }
@@ -15,7 +15,7 @@ export interface ItemProventoMes {
   quantidadeNaDataCom: number;
   valorUnitario: number;
   valorTotal: number;
-  estimado: boolean; // true = mês futuro sem anúncio (média histórica)
+  estimado: boolean;
 }
 
 export interface ResumoMes {
@@ -26,10 +26,16 @@ export interface ResumoMes {
   totalMes: number;
 }
 
+// ---------- Converte qualquer data (BR ou ISO) para 'YYYY-MM-DD' ----------
 export function toISODate(d: string): string {
+  if (!d) return '';
+  // Trata DD-MM-YYYY ou DD/MM/YYYY
+  const mBR = d.match(/^(\d{2})[-/](\d{2})[-/](\d{4})/);
+  if (mBR) return `${mBR[3]}-${mBR[2]}-${mBR[1]}`;
+
+  // Trata YYYY-MM-DD
   if (/^\d{4}-\d{2}-\d{2}/.test(d)) return d.slice(0, 10);
-  const m = d.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
-  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+
   return d;
 }
 
@@ -37,10 +43,13 @@ export function toISODate(d: string): string {
 export function quantidadeNaData(movs: MovimentacaoB3[], ticker: string, dataISO: string): number {
   let q = 0;
   const tk = ticker.toUpperCase();
+  const limitDateISO = toISODate(dataISO);
+
   for (const m of movs) {
     if ((m.ticker || '').toUpperCase() !== tk) continue;
     const d = toISODate(m.data);
-    if (d > dataISO) continue; // ignora movimentos posteriores à data-com
+    if (limitDateISO && d > limitDateISO) continue; // ignora movimentos posteriores à data-com
+
     const tipo = (m.tipo || '').toString().toUpperCase();
     if (tipo.startsWith('C')) q += Math.abs(m.quantidade);
     else if (tipo.startsWith('V')) q -= Math.abs(m.quantidade);
@@ -48,7 +57,7 @@ export function quantidadeNaData(movs: MovimentacaoB3[], ticker: string, dataISO
   return Math.max(0, q);
 }
 
-// Monta o resumo de um mês/ano de PAGAMENTO
+// Monta o resumo de um mês/ano de PAGAMENTO (Apenas dados reais confirmados)
 export function resumoDoMes(
   ano: number,
   mes: number, // 1..12
@@ -56,11 +65,16 @@ export function resumoDoMes(
   proventosPorTicker: Record<string, ProventoBrapi[]>,
   mediaPorTicker: Record<string, number>,
 ): ResumoMes {
-  const key = mesAnoKey(ano, mes);
+  const key = mesAnoKey(ano, mes); // Ex: "2026-08"
   const itens: ItemProventoMes[] = [];
 
   for (const [ticker, lista] of Object.entries(proventosPorTicker)) {
-    const doMes = lista.filter(p => p.dataPagamento.slice(0, 7) === key);
+    // Converte a data de pagamento para ISO para extrair o ano-mês corretamente (YYYY-MM)
+    const doMes = lista.filter(p => {
+      const dateIso = toISODate(p.dataPagamento);
+      return dateIso.slice(0, 7) === key;
+    });
+
     if (doMes.length) {
       for (const p of doMes) {
         const qtd = quantidadeNaData(movs, ticker, p.dataCom);
@@ -76,32 +90,16 @@ export function resumoDoMes(
           estimado: false,
         });
       }
-    } else {
-      // Mês sem anúncio: estima pela média (só se mês atual/futuro)
-      const hojeKey = mesAnoKey(new Date().getFullYear(), new Date().getMonth() + 1);
-      if (key >= hojeKey) {
-        const media = mediaPorTicker[ticker] || 0;
-        if (media > 0) {
-          // posição estimada no último dia útil conhecido (usa hoje como referência)
-          const qtd = quantidadeNaData(movs, ticker, '9999-12-31');
-          if (qtd > 0) {
-            itens.push({
-              ticker,
-              tipo: 'Rendimento',
-              dataCom: '',
-              dataPagamento: `${key}-15`, // data provável
-              quantidadeNaDataCom: qtd,
-              valorUnitario: media,
-              valorTotal: qtd * media,
-              estimado: true,
-            });
-          }
-        }
-      }
     }
   }
 
-  itens.sort((a, b) => a.dataPagamento.localeCompare(b.dataPagamento) || a.ticker.localeCompare(b.ticker));
+  // Ordenação usando conversão para ISO
+  itens.sort((a, b) => {
+    const isoA = toISODate(a.dataPagamento);
+    const isoB = toISODate(b.dataPagamento);
+    return isoA.localeCompare(isoB) || a.ticker.localeCompare(b.ticker);
+  });
+
   const totalMes = itens.reduce((s, i) => s + i.valorTotal, 0);
   return { key, ano, mes, itens, totalMes };
 }
@@ -121,8 +119,18 @@ export function fmtBRL(v: number, casas = 2): string {
   return v.toLocaleString('pt-BR', { minimumFractionDigits: casas, maximumFractionDigits: 3 });
 }
 
-export function fmtDataBR(iso: string): string {
-  if (!iso) return '--/--/--';
-  const [y, m, d] = iso.slice(0, 10).split('-');
-  return `${d}/${m}/${y.slice(2)}`;
+export function fmtDataBR(dateStr: string): string {
+  if (!dateStr) return '--/--/----';
+
+  // Se já estiver formatado com - ou /
+  if (dateStr.includes('-')) {
+    const parts = dateStr.split('-');
+    if (parts[0].length === 4) {
+      // YYYY-MM-DD -> DD/MM/YYYY
+      return `${parts[2]}/${parts[1]}/${parts[0]}`;
+    }
+    // DD-MM-YYYY -> DD/MM/YYYY
+    return dateStr.replace(/-/g, '/');
+  }
+  return dateStr;
 }

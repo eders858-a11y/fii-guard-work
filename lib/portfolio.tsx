@@ -12,14 +12,14 @@ export type Operation = { id: string; ticker: string; kind: OperationKind; date:
 export type Dividend = { id: string; ticker: string; paymentDate: string; dateCom?: string; amountPerShare: number; kind: DividendKind; source: DividendSource; note?: string; createdAt: string };
 export type Quote = { ticker: string; price: number; referenceDate: string; updatedAt: string };
 export type Position = { ticker: string; quantity: number; costBasis: number; averagePrice: number; lastPrice?: number; marketValue?: number; unrealizedResult?: number; realizedResult: number };
-export type Settings = { marketServiceUrl: string; lastSyncAt?: string; lastSyncMessage?: string; themeName?: string; cardColor?: string; textColor?: string; autoSync?: boolean };
+export type Settings = { marketServiceUrl: string; brapiToken?: string; lastSyncAt?: string; lastSyncMessage?: string; themeName?: string; cardColor?: string; textColor?: string; autoSync?: boolean };
 export type PortfolioData = { operations: Operation[]; dividends: Dividend[]; quotes: Record<string, Quote>; settings: Settings };
 
 export type NewOperation = Omit<Operation, "id" | "createdAt" | "fees"> & { fees?: number };
 export type NewDividend = Omit<Dividend, "id" | "createdAt" | "source"> & { source?: DividendSource };
 
 const KEY = "@fii-guard/portfolio-v2";
-const initial: PortfolioData = { operations: [], dividends: [], quotes: {}, settings: { marketServiceUrl: "", themeName: "Oceano", cardColor: "#303234", textColor: "#F5F7FA", autoSync: true } };
+const initial: PortfolioData = { operations: [], dividends: [], quotes: {}, settings: { marketServiceUrl: "", brapiToken: "", themeName: "Oceano", cardColor: "#303234", textColor: "#F5F7FA", autoSync: true } };
 const now = () => new Date().toISOString();
 export const normalizeTicker = (value: string) => value.trim().toUpperCase().replace(/[^A-Z0-9]/g, "").replace(/SA$/, "");
 const id = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -125,12 +125,87 @@ export function PortfolioProvider({ children }: PropsWithChildren) {
   const deleteDividend = useCallback((dividendId: string) => setData((previous) => ({ ...previous, dividends: previous.dividends.filter((item) => item.id !== dividendId) })), []);
   const updateSettings = useCallback((input: Partial<Settings>) => setData((previous) => ({ ...previous, settings: { ...previous.settings, ...input } })), []);
   const applyMarketData = useCallback((quotes: Quote[], dividends: NewDividend[], message?: string) => setData((previous) => { const newDividends = dividends.map((input) => prepareDividend(input)); const unique = newDividends.filter((item) => !previous.dividends.some((old) => old.ticker === item.ticker && old.paymentDate === item.paymentDate && old.dateCom === item.dateCom && old.amountPerShare === item.amountPerShare && old.kind === item.kind)); return { ...previous, quotes: { ...previous.quotes, ...Object.fromEntries(quotes.map((quote) => [normalizeTicker(quote.ticker), { ...quote, ticker: normalizeTicker(quote.ticker) }])) }, dividends: [...previous.dividends, ...unique], settings: { ...previous.settings, lastSyncAt: now(), lastSyncMessage: message } }; }), []);
-  const syncTickers = useCallback(async (tickers: string[]) => { const uniqueTickers = [...new Set(tickers.map(normalizeTicker).filter(Boolean))]; if (!uniqueTickers.length) return; try { const since = data.dividends.filter((item) => item.source !== "manual").map((item) => item.paymentDate).sort().at(-1); const result = await syncMarket(data.settings.marketServiceUrl, uniqueTickers, since); applyMarketData(result.quotes, result.dividends, result.message); } catch (error) { updateSettings({ lastSyncAt: now(), lastSyncMessage: error instanceof Error ? `Atualização automática indisponível: ${error.message}` : "Atualização automática indisponível." }); } }, [applyMarketData, data.dividends, data.settings.marketServiceUrl, updateSettings]);
+
+  const syncTickers = useCallback(async (tickers: string[]) => {
+    const uniqueTickers = [...new Set(tickers.map(normalizeTicker).filter(Boolean))];
+    if (!uniqueTickers.length) return;
+
+    let result: { quotes: Quote[]; dividends: NewDividend[]; message?: string } | null = null;
+    const since = data.dividends.filter((item) => item.source !== "manual").map((item) => item.paymentDate).sort().at(-1);
+
+    // Tentativa 1: Serviço Customizado (se configurado)
+    if (data.settings.marketServiceUrl && data.settings.marketServiceUrl.trim() !== "") {
+      try {
+        result = await syncMarket(data.settings.marketServiceUrl, uniqueTickers, since, data.settings.brapiToken);
+      } catch (e) {
+        // Ignora e tenta o próximo
+      }
+    }
+
+    // Tentativa 2: Brapi Direta (se houver token ou como padrão)
+    if ((!result || !result.quotes.length) && data.settings.brapiToken) {
+      try {
+        const response = await fetch(`https://brapi.dev/api/quote/${uniqueTickers.join(",")}?token=${data.settings.brapiToken}`);
+        const json = await response.json();
+        const quotes: Quote[] = (json.results || []).map((q: any) => ({
+          ticker: normalizeTicker(q.symbol),
+          price: q.regularMarketPrice ?? 0,
+          referenceDate: now(),
+          updatedAt: now(),
+        }));
+        if (quotes.length > 0) {
+          result = { quotes, dividends: [], message: `Cotações atualizadas via Brapi.` };
+        }
+      } catch (e) {
+        // Ignora e tenta o próximo
+      }
+    }
+
+    // Tentativa 3: Yahoo Finance (yfinance) Público Automático (Fallback robusto)
+    if (!result || !result.quotes.length) {
+      try {
+        const yahooQuotes: Quote[] = [];
+        for (const ticker of uniqueTickers) {
+          try {
+            const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}.SA?interval=1d`);
+            const dataJson = await res.json();
+            const meta = dataJson.chart?.result?.[0]?.meta;
+            const price = meta?.regularMarketPrice ?? meta?.previousClose;
+            if (price) {
+              yahooQuotes.push({
+                ticker: normalizeTicker(ticker),
+                price,
+                referenceDate: now(),
+                updatedAt: now(),
+              });
+            }
+          } catch (err) {
+            // Segue para o próximo ticker se falhar individualmente
+          }
+        }
+        if (yahooQuotes.length > 0) {
+          result = { quotes: yahooQuotes, dividends: [], message: `Cotações atualizadas via Yahoo Finance.` };
+        }
+      } catch (e) {
+        // Falhou tudo
+      }
+    }
+
+    if (result && result.quotes.length > 0) {
+      applyMarketData(result.quotes, result.dividends, result.message);
+    } else {
+      updateSettings({
+        lastSyncAt: now(),
+        lastSyncMessage: "Não foi possível atualizar as cotações por nenhuma fonte no momento."
+      });
+    }
+  }, [applyMarketData, data.dividends, data.settings.marketServiceUrl, data.settings.brapiToken, updateSettings]);
+
   const addOperation = useCallback((input: NewOperation) => { const operation = prepareOperation(input); validateSales([...data.operations, operation]); setData((previous) => ({ ...previous, operations: [...previous.operations, operation] })); void syncTickers([operation.ticker]); }, [data.operations, syncTickers]);
   const updateOperation = useCallback((operationId: string, input: NewOperation) => { const original = data.operations.find((operation) => operation.id === operationId); if (!original) throw new Error("Movimentação não encontrada."); const operation = prepareOperation(input, original); const operations = data.operations.map((item) => item.id === operationId ? operation : item); validateSales(operations); setData((previous) => ({ ...previous, operations })); void syncTickers([original.ticker, operation.ticker]); }, [data.operations, syncTickers]);
   const deleteOperation = useCallback((operationId: string) => { const ticker = data.operations.find((operation) => operation.id === operationId)?.ticker; setData((previous) => ({ ...previous, operations: previous.operations.filter((operation) => operation.id !== operationId) })); if (ticker) void syncTickers([ticker]); }, [data.operations, syncTickers]);
   const clearManualOperations = useCallback(() => { const count = data.operations.filter((item) => item.source !== "b3").length; setData((previous) => ({ ...previous, operations: previous.operations.filter((item) => item.source === "b3"), settings: { ...previous.settings, lastSyncAt: now(), lastSyncMessage: `${count} lançamentos manuais removidos. Operações importadas da B3 foram preservadas.` } })); return count; }, [data.operations]);
-  const syncMarketData = useCallback(async () => { const tickers = [...new Set(data.operations.map((item) => normalizeTicker(item.ticker)).filter(Boolean))]; if (!tickers.length) { updateSettings({ lastSyncMessage: "Registre uma compra antes de atualizar." }); return; } const since = data.dividends.filter((item) => item.source !== "manual").map((item) => item.paymentDate).sort().at(-1); const result = await syncMarket(data.settings.marketServiceUrl, tickers, since); applyMarketData(result.quotes, result.dividends, result.message); }, [data.dividends, data.operations, data.settings.marketServiceUrl, applyMarketData, updateSettings]);
+  const syncMarketData = useCallback(async () => { const tickers = [...new Set(data.operations.map((item) => normalizeTicker(item.ticker)).filter(Boolean))]; if (!tickers.length) { updateSettings({ lastSyncMessage: "Registre uma compra antes de atualizar." }); return; } await syncTickers(tickers); }, [data.operations, syncTickers, updateSettings]);
   const autoSyncStarted = useRef(false);
   useEffect(() => { if (!ready || autoSyncStarted.current) return; autoSyncStarted.current = true; void syncMarketData().catch(() => undefined); }, [ready, syncMarketData]);
   const exportData = useCallback(() => shareBackup(data), [data]);

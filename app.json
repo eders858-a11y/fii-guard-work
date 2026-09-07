@@ -1,0 +1,14 @@
+{
+  "expo": {
+    "name": "fii-guard-work",
+    "slug": "fii-guard-work",
+    "version": "1.0.0",
+    "android": {
+      "package": "com.fiiguard.app",
+      "compileSdkVersion": 35,
+      "targetSdkVersion": 35,
+      "minSdkVersion": 24,
+      "usesCleartextTraffic": true
+    }
+  }
+}
