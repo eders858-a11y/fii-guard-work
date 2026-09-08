@@ -113,56 +113,130 @@ function prepareDividend(input: NewDividend, original?: Dividend): Dividend {
   return { ...input, ticker, amountPerShare, id: original?.id ?? id("div"), source: input.source ?? original?.source ?? "manual", createdAt: original?.createdAt ?? now() };
 }
 
-interface ContextValue extends PortfolioData { ready: boolean; snapshot: ReturnType<typeof snapshot>; addOperation: (input: NewOperation) => void; updateOperation: (id: string, input: NewOperation) => void; deleteOperation: (id: string) => void; clearManualOperations: () => number; addDividend: (input: NewDividend) => void; updateDividend: (id: string, input: NewDividend) => void; deleteDividend: (id: string) => void; updateSettings: (input: Partial<Settings>) => void; applyMarketData: (quotes: Quote[], dividends: NewDividend[], message?: string) => void; syncMarketData: () => Promise<void>; exportData: () => Promise<void>; importData: () => Promise<boolean>; importB3: (mode?: "merge" | "update") => Promise<{ imported: number; duplicates: number; warnings: string[] } | null>; }
+interface ContextValue extends PortfolioData {
+  ready: boolean;
+  snapshot: ReturnType<typeof snapshot>;
+  addOperation: (input: NewOperation) => void;
+  updateOperation: (id: string, input: NewOperation) => void;
+  deleteOperation: (id: string) => void;
+  clearManualOperations: () => number;
+  addDividend: (input: NewDividend) => void;
+  updateDividend: (id: string, input: NewDividend) => void;
+  deleteDividend: (id: string) => void;
+  updateSettings: (input: Partial<Settings>) => void;
+  applyMarketData: (quotes: Quote[], dividends: NewDividend[], message?: string) => void;
+  syncMarketData: () => Promise<void>;
+  exportData: () => Promise<void>;
+  importData: () => Promise<boolean>;
+  importB3: (mode?: "merge" | "update") => Promise<{ imported: number; duplicates: number; warnings: string[] } | null>;
+}
+
 const Context = createContext<ContextValue | null>(null);
 
 export function PortfolioProvider({ children }: PropsWithChildren) {
-  const [data, setData] = useState<PortfolioData>(initial); const [ready, setReady] = useState(false);
-  useEffect(() => { AsyncStorage.getItem(KEY).then((raw) => { if (raw) { const parsed = JSON.parse(raw) as Partial<PortfolioData>; setData({ ...initial, ...parsed, settings: { ...initial.settings, ...(parsed.settings ?? {}) } }); } }).catch(() => undefined).finally(() => setReady(true)); }, []);
-  useEffect(() => { if (ready) AsyncStorage.setItem(KEY, JSON.stringify(data)).catch(() => undefined); }, [data, ready]);
-  const addDividend = useCallback((input: NewDividend) => { const dividend = prepareDividend(input); setData((previous) => ({ ...previous, dividends: [...previous.dividends, dividend] })); }, []);
-  const updateDividend = useCallback((dividendId: string, input: NewDividend) => { const original = data.dividends.find((dividend) => dividend.id === dividendId); if (!original) throw new Error("Provento não encontrado."); const dividend = prepareDividend(input, original); setData((previous) => ({ ...previous, dividends: previous.dividends.map((item) => item.id === dividendId ? dividend : item) })); }, [data.dividends]);
-  const deleteDividend = useCallback((dividendId: string) => setData((previous) => ({ ...previous, dividends: previous.dividends.filter((item) => item.id !== dividendId) })), []);
-  const updateSettings = useCallback((input: Partial<Settings>) => setData((previous) => ({ ...previous, settings: { ...previous.settings, ...input } })), []);
-  const applyMarketData = useCallback((quotes: Quote[], dividends: NewDividend[], message?: string) => setData((previous) => { const newDividends = dividends.map((input) => prepareDividend(input)); const unique = newDividends.filter((item) => !previous.dividends.some((old) => old.ticker === item.ticker && old.paymentDate === item.paymentDate && old.dateCom === item.dateCom && old.amountPerShare === item.amountPerShare && old.kind === item.kind)); return { ...previous, quotes: { ...previous.quotes, ...Object.fromEntries(quotes.map((quote) => [normalizeTicker(quote.ticker), { ...quote, ticker: normalizeTicker(quote.ticker) }])) }, dividends: [...previous.dividends, ...unique], settings: { ...previous.settings, lastSyncAt: now(), lastSyncMessage: message } }; }), []);
+  const [data, setData] = useState<PortfolioData>(initial);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    AsyncStorage.getItem(KEY)
+      .then((raw) => {
+        if (raw) {
+          const parsed = JSON.parse(raw) as Partial<PortfolioData>;
+          setData({
+            ...initial,
+            ...parsed,
+            settings: { ...initial.settings, ...(parsed.settings ?? {}) },
+          });
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => setReady(true));
+  }, []);
+
+  useEffect(() => {
+    if (ready) AsyncStorage.setItem(KEY, JSON.stringify(data)).catch(() => undefined);
+  }, [data, ready]);
+
+  const addDividend = useCallback((input: NewDividend) => {
+    const dividend = prepareDividend(input);
+    setData((previous) => ({ ...previous, dividends: [...previous.dividends, dividend] }));
+  }, []);
+
+  const updateDividend = useCallback((dividendId: string, input: NewDividend) => {
+    const original = data.dividends.find((dividend) => dividend.id === dividendId);
+    if (!original) throw new Error("Provento não encontrado.");
+    const dividend = prepareDividend(input, original);
+    setData((previous) => ({
+      ...previous,
+      dividends: previous.dividends.map((item) => (item.id === dividendId ? dividend : item)),
+    }));
+  }, [data.dividends]);
+
+  const deleteDividend = useCallback((dividendId: string) => {
+    setData((previous) => ({
+      ...previous,
+      dividends: previous.dividends.filter((item) => item.id !== dividendId),
+    }));
+  }, []);
+
+  const updateSettings = useCallback((input: Partial<Settings>) => {
+    setData((previous) => ({
+      ...previous,
+      settings: { ...previous.settings, ...input },
+    }));
+  }, []);
+
+  const applyMarketData = useCallback((quotes: Quote[], dividends: NewDividend[], message?: string) => {
+    setData((previous) => {
+      const newDividends = dividends.map((input) => prepareDividend(input));
+      const unique = newDividends.filter(
+        (item) =>
+          !previous.dividends.some(
+            (old) =>
+              old.ticker === item.ticker &&
+              old.paymentDate === item.paymentDate &&
+              old.dateCom === item.dateCom &&
+              old.amountPerShare === item.amountPerShare &&
+              old.kind === item.kind
+          )
+      );
+      return {
+        ...previous,
+        quotes: {
+          ...previous.quotes,
+          ...Object.fromEntries(
+            quotes.map((quote) => [normalizeTicker(quote.ticker), { ...quote, ticker: normalizeTicker(quote.ticker) }])
+          ),
+        },
+        dividends: [...previous.dividends, ...unique],
+        settings: { ...previous.settings, lastSyncAt: now(), lastSyncMessage: message },
+      };
+    });
+  }, []);
 
   const syncTickers = useCallback(async (tickers: string[]) => {
     const uniqueTickers = [...new Set(tickers.map(normalizeTicker).filter(Boolean))];
     if (!uniqueTickers.length) return;
 
-    let result: { quotes: Quote[]; dividends: NewDividend[]; message?: string } | null = null;
-    const since = data.dividends.filter((item) => item.source !== "manual").map((item) => item.paymentDate).sort().at(-1);
+    let quotes: Quote[] = [];
+    let fetchedDividends: NewDividend[] = [];
+    let message = "";
 
-    // Tentativa 1: Serviço Customizado (se configurado)
-    if (data.settings.marketServiceUrl && data.settings.marketServiceUrl.trim() !== "") {
-      try {
-        result = await syncMarket(data.settings.marketServiceUrl, uniqueTickers, since, data.settings.brapiToken);
-      } catch (e) {
-        // Ignora e tenta o próximo
-      }
-    }
-
-    // Tentativa 2: Brapi Direta (se houver token ou como padrão)
-    if ((!result || !result.quotes.length) && data.settings.brapiToken) {
+    if (data.settings.brapiToken) {
       try {
         const response = await fetch(`https://brapi.dev/api/quote/${uniqueTickers.join(",")}?token=${data.settings.brapiToken}`);
         const json = await response.json();
-        const quotes: Quote[] = (json.results || []).map((q: any) => ({
+        quotes = (json.results || []).map((q: any) => ({
           ticker: normalizeTicker(q.symbol),
           price: q.regularMarketPrice ?? 0,
           referenceDate: now(),
           updatedAt: now(),
         }));
-        if (quotes.length > 0) {
-          result = { quotes, dividends: [], message: `Cotações atualizadas via Brapi.` };
-        }
-      } catch (e) {
-        // Ignora e tenta o próximo
-      }
+        if (quotes.length > 0) message = "Cotações atualizadas via Brapi.";
+      } catch (e) {}
     }
 
-    // Tentativa 3: Yahoo Finance (yfinance) Público Automático (Fallback robusto)
-    if (!result || !result.quotes.length) {
+    if (!quotes.length) {
       try {
         const yahooQuotes: Quote[] = [];
         for (const ticker of uniqueTickers) {
@@ -179,40 +253,211 @@ export function PortfolioProvider({ children }: PropsWithChildren) {
                 updatedAt: now(),
               });
             }
-          } catch (err) {
-            // Segue para o próximo ticker se falhar individualmente
-          }
+          } catch (err) {}
         }
         if (yahooQuotes.length > 0) {
-          result = { quotes: yahooQuotes, dividends: [], message: `Cotações atualizadas via Yahoo Finance.` };
+          quotes = yahooQuotes;
+          message = message ? `${message} e Yahoo Finance.` : "Cotações atualizadas via Yahoo Finance.";
         }
-      } catch (e) {
-        // Falhou tudo
-      }
+      } catch (e) {}
     }
 
-    if (result && result.quotes.length > 0) {
-      applyMarketData(result.quotes, result.dividends, result.message);
+    if (data.settings.marketServiceUrl && data.settings.marketServiceUrl.trim() !== "") {
+      try {
+        const responseDivs = await fetch(`${data.settings.marketServiceUrl}/api/proventos-lote?tickers=${uniqueTickers.join(",")}`);
+        const jsonDivs = await responseDivs.json();
+
+        const rawDividends = jsonDivs.dividends || jsonDivs.results || jsonDivs || [];
+        fetchedDividends = rawDividends.map((d: any) => {
+          const rawAmount = d.valorUnitario ?? d.amountPerShare ?? d.value ?? 0;
+          const parsedAmount = typeof rawAmount === 'string' ? Number(rawAmount.replace(',', '.')) : Number(rawAmount);
+
+          return {
+            ticker: normalizeTicker(d.ticker || d.symbol),
+            paymentDate: d.dataPagamento || d.paymentDate,
+            dateCom: d.dataCom || d.dateCom || undefined,
+            amountPerShare: isNaN(parsedAmount) ? 0 : parsedAmount,
+            kind: (d.tipo || d.kind || "").toLowerCase().includes("amort") ? "amortization" : "income",
+            source: "yfinance" as const,
+          };
+        }).filter((d: any) => d.ticker && d.paymentDate && d.amountPerShare > 0);
+
+        if (fetchedDividends.length > 0) {
+          message = message ? `${message} + Proventos da Render.` : "Proventos atualizados via API Render.";
+        }
+      } catch (e) {}
+    }
+
+    if (quotes.length > 0 || fetchedDividends.length > 0) {
+      applyMarketData(quotes, fetchedDividends, message || "Sincronização concluída.");
     } else {
       updateSettings({
         lastSyncAt: now(),
-        lastSyncMessage: "Não foi possível atualizar as cotações por nenhuma fonte no momento."
+        lastSyncMessage: "Não foi possível carregar cotações ou proventos no momento.",
       });
     }
-  }, [applyMarketData, data.dividends, data.settings.marketServiceUrl, data.settings.brapiToken, updateSettings]);
+  }, [applyMarketData, data.settings.marketServiceUrl, data.settings.brapiToken, updateSettings]);
 
-  const addOperation = useCallback((input: NewOperation) => { const operation = prepareOperation(input); validateSales([...data.operations, operation]); setData((previous) => ({ ...previous, operations: [...previous.operations, operation] })); void syncTickers([operation.ticker]); }, [data.operations, syncTickers]);
-  const updateOperation = useCallback((operationId: string, input: NewOperation) => { const original = data.operations.find((operation) => operation.id === operationId); if (!original) throw new Error("Movimentação não encontrada."); const operation = prepareOperation(input, original); const operations = data.operations.map((item) => item.id === operationId ? operation : item); validateSales(operations); setData((previous) => ({ ...previous, operations })); void syncTickers([original.ticker, operation.ticker]); }, [data.operations, syncTickers]);
-  const deleteOperation = useCallback((operationId: string) => { const ticker = data.operations.find((operation) => operation.id === operationId)?.ticker; setData((previous) => ({ ...previous, operations: previous.operations.filter((operation) => operation.id !== operationId) })); if (ticker) void syncTickers([ticker]); }, [data.operations, syncTickers]);
-  const clearManualOperations = useCallback(() => { const count = data.operations.filter((item) => item.source !== "b3").length; setData((previous) => ({ ...previous, operations: previous.operations.filter((item) => item.source === "b3"), settings: { ...previous.settings, lastSyncAt: now(), lastSyncMessage: `${count} lançamentos manuais removidos. Operações importadas da B3 foram preservadas.` } })); return count; }, [data.operations]);
-  const syncMarketData = useCallback(async () => { const tickers = [...new Set(data.operations.map((item) => normalizeTicker(item.ticker)).filter(Boolean))]; if (!tickers.length) { updateSettings({ lastSyncMessage: "Registre uma compra antes de atualizar." }); return; } await syncTickers(tickers); }, [data.operations, syncTickers, updateSettings]);
+  const addOperation = useCallback((input: NewOperation) => {
+    const operation = prepareOperation(input);
+    validateSales([...data.operations, operation]);
+    setData((previous) => ({ ...previous, operations: [...previous.operations, operation] }));
+    void syncTickers([operation.ticker]);
+  }, [data.operations, syncTickers]);
+
+  const updateOperation = useCallback((operationId: string, input: NewOperation) => {
+    const original = data.operations.find((operation) => operation.id === operationId);
+    if (!original) throw new Error("Movimentação não encontrada.");
+    const operation = prepareOperation(input, original);
+    const operations = data.operations.map((item) => (item.id === operationId ? operation : item));
+    validateSales(operations);
+    setData((previous) => ({ ...previous, operations }));
+    void syncTickers([original.ticker, operation.ticker]);
+  }, [data.operations, syncTickers]);
+
+  const deleteOperation = useCallback((operationId: string) => {
+    const ticker = data.operations.find((operation) => operation.id === operationId)?.ticker;
+    setData((previous) => ({
+      ...previous,
+      operations: previous.operations.filter((operation) => operation.id !== operationId),
+    }));
+    if (ticker) void syncTickers([ticker]);
+  }, [data.operations, syncTickers]);
+
+  const clearManualOperations = useCallback(() => {
+    const count = data.operations.filter((item) => item.source !== "b3").length;
+    setData((previous) => ({
+      ...previous,
+      operations: previous.operations.filter((item) => item.source === "b3"),
+      settings: {
+        ...previous.settings,
+        lastSyncAt: now(),
+        lastSyncMessage: `${count} lançamentos manuais removidos. Operações importadas da B3 foram preservadas.`,
+      },
+    }));
+    return count;
+  }, [data.operations]);
+
+  const syncMarketData = useCallback(async () => {
+    const tickers = [...new Set(data.operations.map((item) => normalizeTicker(item.ticker)).filter(Boolean))];
+    if (!tickers.length) {
+      updateSettings({ lastSyncMessage: "Registre uma compra antes de atualizar." });
+      return;
+    }
+    await syncTickers(tickers);
+  }, [data.operations, syncTickers, updateSettings]);
+
   const autoSyncStarted = useRef(false);
-  useEffect(() => { if (!ready || autoSyncStarted.current) return; autoSyncStarted.current = true; void syncMarketData().catch(() => undefined); }, [ready, syncMarketData]);
+  useEffect(() => {
+    if (!ready || autoSyncStarted.current) return;
+    autoSyncStarted.current = true;
+    void syncMarketData().catch(() => undefined);
+  }, [ready, syncMarketData]);
+
   const exportData = useCallback(() => shareBackup(data), [data]);
-  const importData = useCallback(async () => { const backup = await pickBackup(); if (!backup) return false; setData((previous) => ({ ...previous, operations: backup.operations, dividends: backup.dividends, quotes: backup.quotes })); return true; }, []);
-  const importB3 = useCallback(async (mode: "merge" | "update" = "merge") => { const imported = await importB3Spreadsheet(); if (!imported) return null; const operationKey = (item: NewOperation) => `${normalizeTicker(item.ticker)}|${item.kind}|${item.date}`; const exactKey = (item: NewOperation) => `${operationKey(item)}|${Number(item.quantity).toFixed(8)}|${Number(item.price).toFixed(8)}`; const uniqueImported = new Set<string>(); const newOperations = imported.operations.filter((item) => { const key = exactKey(item); if (uniqueImported.has(key)) return false; uniqueImported.add(key); return true; }).map((item) => prepareOperation({ ...item, source: "b3" })); const importedByKey = new Map(newOperations.map((item) => [operationKey(item), item])); const updatedKeys = new Set<string>(); const operations = mode === "merge" ? newOperations : data.operations.flatMap((item) => { const key = operationKey(item); const replacement = importedByKey.get(key); if (!replacement) return [item]; if (updatedKeys.has(key)) return []; updatedKeys.add(key); return [replacement]; }); const duplicates = imported.operations.length - newOperations.length; setData((previous) => ({ ...previous, operations, dividends: [...previous.dividends], settings: { ...previous.settings, lastSyncAt: now(), lastSyncMessage: mode === "merge" ? `Carteira substituída pelo extrato B3: ${newOperations.length} operações mantidas. Operações ausentes no arquivo foram removidas.` : `${updatedKeys.size} operações existentes atualizadas; nenhuma operação nova foi adicionada e as demais foram preservadas.` } })); const tickers = [...new Set(newOperations.map((item) => item.ticker))]; if (tickers.length) void syncTickers(tickers); return { imported: newOperations.length, duplicates, warnings: [...imported.warnings, ...(imported.dividends.length ? ["Linhas de proventos do extrato não foram importadas; use as divulgações automáticas com data-com e pagamento."] : [])] }; }, [data.operations, syncTickers]);
+
+  const importData = useCallback(async () => {
+    const backup = await pickBackup();
+    if (!backup) return false;
+    setData((previous) => ({
+      ...previous,
+      operations: backup.operations,
+      dividends: backup.dividends,
+      quotes: backup.quotes,
+    }));
+    return true;
+  }, []);
+
+  const importB3 = useCallback(async (mode: "merge" | "update" = "merge") => {
+    const imported = await importB3Spreadsheet();
+    if (!imported) return null;
+    const operationKey = (item: NewOperation) => `${normalizeTicker(item.ticker)}|${item.kind}|${item.date}`;
+    const exactKey = (item: NewOperation) => `${operationKey(item)}|${Number(item.quantity).toFixed(8)}|${Number(item.price).toFixed(8)}`;
+    const uniqueImported = new Set<string>();
+    const newOperations = imported.operations
+      .filter((item) => {
+        const key = exactKey(item);
+        if (uniqueImported.has(key)) return false;
+        uniqueImported.add(key);
+        return true;
+      })
+      .map((item) => prepareOperation({ ...item, source: "b3" }));
+
+    const importedByKey = new Map(newOperations.map((item) => [operationKey(item), item]));
+    const updatedKeys = new Set<string>();
+    const operations = mode === "merge"
+      ? newOperations
+      : data.operations.flatMap((item) => {
+          const key = operationKey(item);
+          const replacement = importedByKey.get(key);
+          if (!replacement) return [item];
+          if (updatedKeys.has(key)) return [];
+          updatedKeys.add(key);
+          return [replacement];
+        });
+
+    const duplicates = imported.operations.length - newOperations.length;
+    setData((previous) => ({
+      ...previous,
+      operations,
+      dividends: [...previous.dividends],
+      settings: {
+        ...previous.settings,
+        lastSyncAt: now(),
+        lastSyncMessage: mode === "merge"
+          ? `Carteira substituída pelo extrato B3: ${newOperations.length} operações mantidas.`
+          : `${updatedKeys.size} operações existentes atualizadas.`,
+      },
+    }));
+
+    const tickers = [...new Set(newOperations.map((item) => item.ticker))];
+    if (tickers.length) void syncTickers(tickers);
+    return { imported: newOperations.length, duplicates, warnings: [...imported.warnings] };
+  }, [data.operations, syncTickers]);
+
   const calculated = useMemo(() => snapshot(data.operations, data.quotes), [data.operations, data.quotes]);
-  const value = useMemo(() => ({ ...data, ready, snapshot: calculated, addOperation, updateOperation, deleteOperation, clearManualOperations, addDividend, updateDividend, deleteDividend, updateSettings, applyMarketData, syncMarketData, exportData, importData, importB3 }), [data, ready, calculated, addOperation, updateOperation, deleteOperation, clearManualOperations, addDividend, updateDividend, deleteDividend, updateSettings, applyMarketData, syncMarketData, exportData, importData, importB3]);
+
+  const value = useMemo(() => ({
+    ...data,
+    ready,
+    snapshot: calculated,
+    addOperation,
+    updateOperation,
+    deleteOperation,
+    clearManualOperations,
+    addDividend,
+    updateDividend,
+    deleteDividend,
+    updateSettings,
+    applyMarketData,
+    syncMarketData,
+    exportData,
+    importData,
+    importB3,
+  }), [
+    data,
+    ready,
+    calculated,
+    addOperation,
+    updateOperation,
+    deleteOperation,
+    clearManualOperations,
+    addDividend,
+    updateDividend,
+    deleteDividend,
+    updateSettings,
+    applyMarketData,
+    syncMarketData,
+    exportData,
+    importData,
+    importB3,
+  ]);
+
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }
-export function usePortfolio() { const value = useContext(Context); if (!value) throw new Error("usePortfolio deve ser usado dentro de PortfolioProvider."); return value; }
+
+export function usePortfolio() {
+  const value = useContext(Context);
+  if (!value) throw new Error("usePortfolio deve ser usado dentro de PortfolioProvider.");
+  return value;
+}
