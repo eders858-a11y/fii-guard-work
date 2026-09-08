@@ -44,3 +44,16 @@ def get_proventos_lote():
         "totalRegistros": len(todos_dividendos),
         "dividends": todos_dividendos
     })
+from datetime import datetime
+
+# Exemplo de filtro para pegar apenas de 2025 em diante (ou ano atual)
+ANO_CORTE = 2025
+
+# Dentro das funções de busca, você pode validar:
+try:
+    dt_obj = data_idx.to_pydatetime()
+    if dt_obj.year >= ANO_CORTE:
+        data_str = dt_obj.strftime('%d/%m/%Y')
+        # ... adiciona à lista
+except Exception:
+    pass
