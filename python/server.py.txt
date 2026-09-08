@@ -1,3 +1,15 @@
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+import yfinance as yf
+import requests
+import os
+from datetime import datetime
+
+app = Flask(__name__)
+CORS(app)
+
+HISTORICO_CACHE = {}
+
 def buscar_yfinance(simbolo, ticker):
     lista_divs = []
     try:
@@ -5,10 +17,7 @@ def buscar_yfinance(simbolo, ticker):
         dividends = ativo.dividends
         if dividends is not None and not dividends.empty:
             for data_idx, valor in dividends.items():
-                # Converte o timestamp do pandas para datetime e formata com barras
-                dt_obj = data_idx.to_pydatetime()
-                data_str = dt_obj.strftime('%d/%m/%Y')
-                
+                data_str = data_idx.strftime('%d/%m/%Y')
                 val_float = float(valor)
                 valor_formatado = f"R$ {val_float:.2f}".replace('.', ',')
                 lista_divs.append({
@@ -22,6 +31,81 @@ def buscar_yfinance(simbolo, ticker):
     except Exception as e:
         print(f"Aviso [yfinance] para {ticker}: {e}")
     return lista_divs
+
+def buscar_statusinvest_alternativo(ticker):
+    lista_divs = []
+    try:
+        url = f"https://statusinvest.com.br/fundos-imobiliarios/payoutresult?q={ticker}"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        response = requests.get(url, headers=headers, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            for item in data.get("list", []):
+                raw_addr = item.get("addr", "")
+                raw_pay = item.get("payday", "")
+                
+                # Tenta converter para dd/mm/yyyy se vier no formato ISO (YYYY-MM-DD)
+                try:
+                    data_com_fmt = datetime.strptime(raw_addr.split('T')[0], '%Y-%m-%d').strftime('%d/%m/%Y') if raw_addr else ""
+                except:
+                    data_com_fmt = raw_addr
+
+                try:
+                    data_pay_fmt = datetime.strptime(raw_pay.split('T')[0], '%Y-%m-%d').strftime('%d/%m/%Y') if raw_pay else ""
+                except:
+                    data_pay_fmt = raw_pay
+
+                val_float = float(item.get("value", 0))
+                valor_formatado = f"R$ {val_float:.2f}".replace('.', ',')
+
+                lista_divs.append({
+                    "ticker": ticker,
+                    "dataCom": data_com_fmt,
+                    "dataPagamento": data_pay_fmt,
+                    "valorUnitario": valor_formatado,
+                    "tipo": "Rendimento",
+                    "fonte": "statusinvest"
+                })
+    except Exception as e:
+        print(f"Aviso [Alternativo] para {ticker}: {e}")
+    return lista_divs
+
+def consolidar_ses_apagar(ticker, novos_dados):
+    if ticker not in HISTORICO_CACHE:
+        HISTORICO_CACHE[ticker] = []
+    
+    existentes = HISTORICO_CACHE[ticker]
+    mapa_unicos = {f"{d['dataPagamento']}_{d['valorUnitario']}": d for d in existentes}
+    
+    for item in novos_dados:
+        chave = f"{item['dataPagamento']}_{item['valorUnitario']}"
+        if chave not in mapa_unicos:
+            mapa_unicos[chave] = item
+
+    lista_final = list(mapa_unicos.values())
+    HISTORICO_CACHE[ticker] = lista_final
+    return lista_final
+
+@app.route('/api/proventos', methods=['GET'])
+def get_proventos():
+    ticker = request.args.get('ticker', '').upper().strip()
+    if not ticker:
+        return jsonify({"error": "Ticker não informado"}), 400
+
+    simbolo = ticker if ticker.endswith('.SA') else f"{ticker}.SA"
+    
+    dados_yf = buscar_yfinance(simbolo, ticker)
+    dados_alt = buscar_statusinvest_alternativo(ticker)
+    
+    todas_fontes = dados_yf + dados_alt
+    dados_consolidados = consolidar_ses_apagar(ticker, todas_fontes)
+
+    return jsonify({
+        "ticker": ticker,
+        "totalRegistros": len(dados_consolidados),
+        "dividends": dados_consolidados
+    })
+
 @app.route('/api/proventos-lote', methods=['GET'])
 def get_proventos_lote():
     tickers_param = request.args.get('tickers', '').upper().strip()
@@ -44,16 +128,7 @@ def get_proventos_lote():
         "totalRegistros": len(todos_dividendos),
         "dividends": todos_dividendos
     })
-from datetime import datetime
 
-# Exemplo de filtro para pegar apenas de 2025 em diante (ou ano atual)
-ANO_CORTE = 2025
-
-# Dentro das funções de busca, você pode validar:
-try:
-    dt_obj = data_idx.to_pydatetime()
-    if dt_obj.year >= ANO_CORTE:
-        data_str = dt_obj.strftime('%d/%m/%Y')
-        # ... adiciona à lista
-except Exception:
-    pass
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)

@@ -57,15 +57,17 @@ export async function syncMarket(serviceUrl: string | undefined, tickers: string
 
         dividends = raw.map((d: any) => {
           const tk = normalizeTicker(d.ticker || d.symbol || d.Ticker || d.ativo || "");
-          // Pega o valor original do R$ sem formatações agressivas
-          const valRaw = String(d.valorUnitario || d.rendimento || d.Rendimento || d.valor || d.amount || "0");
-          const valNum = parseFloat(valRaw.replace(",", "."));
+
+          // Limpeza robusta para formatos como "R$ 0,10" ou "0,10"
+          let valRaw = String(d.valorUnitario || d.rendimento || d.Rendimento || d.valor || d.amount || d.value || d.rate || "0");
+          valRaw = valRaw.replace(/R\$\s*/gi, "").replace(/\./g, "").replace(",", ".");
+          const valNum = parseFloat(valRaw);
 
           return {
             ticker: tk,
             paymentDate: toISO(d.dataPagamento || d.paymentDate || d.date),
             dateCom: toISO(d.dataCom || d.dateCom || d.date),
-            amountPerShare: valNum,
+            amountPerShare: isNaN(valNum) ? 0 : valNum,
             kind: String(d.tipo || d.kind || "").toUpperCase().includes("AMORT") ? "amortization" : "income",
             source: "render"
           };
