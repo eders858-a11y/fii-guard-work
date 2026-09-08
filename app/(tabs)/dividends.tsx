@@ -1,7 +1,7 @@
 import { router, Stack } from "expo-router";
-import { FlatList, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { useMemo, useState } from "react";
-import { usePortfolio, type Dividend } from "@/lib/portfolio";
+import { Alert, FlatList, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useMemo, useState, useEffect } from "react";
+import { usePortfolio, type Dividend, normalizeTicker, quantityAt } from "@/lib/portfolio";
 import { ScreenContainer } from "@/components/screen-container";
 import { Button, EmptyState, LoadingState } from "@/components/portfolio-ui";
 import { currency, date, monthLabel } from "@/lib/format";
@@ -15,12 +15,10 @@ const shift = (key: string, delta: number) => {
 };
 
 const cleanTicker = (value: string) => value.trim().toUpperCase().replace(/[^A-Z0-9]/g, "").replace(/SA$/, "");
-const quantityAt = (ticker: string, reference: string, operations: { ticker: string; date: string; kind: "buy" | "sell"; quantity: number }[]) =>
-  operations.filter((item) => cleanTicker(item.ticker) === cleanTicker(ticker) && item.date <= reference).reduce((total, item) => total + (item.kind === "buy" ? item.quantity : -item.quantity), 0);
 
-function DividendTableRow({ item, operations, colors }: { item: Dividend; operations: { ticker: string; date: string; kind: "buy" | "sell"; quantity: number }[]; colors: ReturnType<typeof themeColors> }) {
-  const referenceDate = item.dateCom || (item.source === "manual" ? item.paymentDate : "");
-  const quantity = Math.max(0, referenceDate ? quantityAt(item.ticker, referenceDate, operations) : 0);
+function DividendTableRow({ item, operations, colors }: { item: Dividend; operations: any[]; colors: ReturnType<typeof themeColors> }) {
+  const referenceDate = item.dateCom || item.paymentDate;
+  const quantity = Math.max(0, referenceDate ? quantityAt(operations, item.ticker, referenceDate) : 0);
   const total = quantity * item.amountPerShare;
   return (
     <View style={[styles.row, { borderBottomColor: "#4A4D50" }]}>
@@ -58,23 +56,71 @@ function HistoryChart({ values, colors }: { values: { key: string; value: number
 }
 
 export default function DividendsScreen() {
-  const { ready, dividends, operations, settings } = usePortfolio();
+  const { ready, dividends, operations, settings, syncMarketData } = usePortfolio();
   const [selected, setSelected] = useState(new Date().toISOString().slice(0, 7));
+  const [refreshing, setRefreshing] = useState(false);
   const colors = themeColors(settings.themeName);
-  const data = useMemo(() => [...dividends].sort((a, b) => b.paymentDate.localeCompare(a.paymentDate)), [dividends]);
-  const periodData = useMemo(() => data.filter((item) => item.paymentDate.slice(0, 7) === selected && (item.dateCom || item.source === "manual") && quantityAt(item.ticker, item.dateCom || item.paymentDate, operations) > 0), [data, selected, operations]);
-  const totalFor = (items: Dividend[]) => items.reduce((sum, item) => sum + ((item.dateCom || item.source === "manual") ? Math.max(0, quantityAt(item.ticker, item.dateCom || item.paymentDate, operations)) * item.amountPerShare : 0), 0);
-  const monthTotal = useMemo(() => totalFor(periodData), [periodData, operations]);
 
+  const onRefresh = async (silent = false) => {
+    setRefreshing(true);
+    try {
+      const result = await syncMarketData();
+      if (!silent) {
+        Alert.alert("Sincronização", result?.message || "Dados atualizados.");
+      }
+    } catch (e) {
+      if (!silent) {
+        Alert.alert("Erro de Sincronização", e instanceof Error ? e.message : "Não foi possível conectar ao serviço.");
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  // Sincroniza automaticamente sempre que entrar na aba para buscar dados novos na internet
+  useEffect(() => {
+    if (ready && operations.length > 0) {
+      onRefresh(true); // Chamada silenciosa ao abrir a aba
+    }
+  }, [ready]);
+
+  const data = useMemo(() => [...dividends].sort((a, b) => b.paymentDate.localeCompare(a.paymentDate)), [dividends]);
+
+  const periodData = useMemo(() => {
+    return data.filter((item) => {
+      const paymentMonth = (item.paymentDate || "").slice(0, 7);
+      return paymentMonth === selected;
+    });
+  }, [data, selected]);
+
+  const totalFor = (items: Dividend[]) => {
+    return items.reduce((sum, item) => {
+      const refDate = item.dateCom || item.paymentDate;
+      const q = Math.max(0, quantityAt(operations, item.ticker, refDate));
+      return sum + (q * item.amountPerShare);
+    }, 0);
+  };
+
+  const monthTotal = useMemo(() => totalFor(periodData), [periodData, operations]);
+  const historyTotal = useMemo(() => totalFor(data), [data, operations]);
   const currentYear = selected.slice(0, 4);
+  const currentYearNum = parseInt(currentYear, 10);
   const currentMonthNum = parseInt(selected.slice(5, 7), 10);
 
-  // Gera o histórico completo com os 12 meses do ano selecionado
+  const shiftYear = (delta: number) => {
+    const newYear = currentYearNum + delta;
+    setSelected(`${newYear}-${String(currentMonthNum).padStart(2, "0")}`);
+  };
+
+  const prevMonth = () => setSelected(shift(selected, -1));
+  const nextMonth = () => setSelected(shift(selected, 1));
+
   const chart = useMemo(() => {
     return Array.from({ length: 12 }, (_, index) => {
       const mStr = String(index + 1).padStart(2, '0');
       const key = `${currentYear}-${mStr}`;
-      const value = totalFor(data.filter((item) => item.paymentDate.slice(0, 7) === key && (item.dateCom || item.source === "manual") && quantityAt(item.ticker, item.dateCom || item.paymentDate, operations) > 0));
+      const monthItems = data.filter((item) => (item.paymentDate || "").slice(0, 7) === key);
+      const value = totalFor(monthItems);
       return { key, value };
     });
   }, [data, operations, currentYear]);
@@ -85,10 +131,38 @@ export default function DividendsScreen() {
 
   return <ScreenContainer style={{ backgroundColor: surface }} edges={["top", "left", "right"]}>
     <Stack.Screen options={{ headerShown: false }} />
-    <FlatList data={periodData} keyExtractor={(item) => item.id} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}
+    <FlatList
+      data={periodData}
+      keyExtractor={(item) => item.id}
+      contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}
+      onRefresh={onRefresh}
+      refreshing={refreshing}
       ListHeaderComponent={<View>
-        <View style={styles.topBar}><Text style={[styles.menu, { color: colors.textColor }]}>☰</Text><Text style={[styles.title, { color: colors.textColor }]}>Agenda Dividendos</Text><Text style={[styles.headerIcon, { color: colors.textColor }]}>◉</Text><Text style={[styles.search, { color: colors.textColor }]}>⌕</Text></View>
-        <View style={styles.filters}><Text style={[styles.filterFund, { color: colors.textColor }]}>▣  Meus FIIs⌄</Text><Pressable onPress={() => setSelected((value) => shift(value, -1))}><Text style={[styles.arrow, { color: colors.textColor }]}>‹</Text></Pressable><Text style={[styles.filterMonth, { color: colors.textColor }]}>{monthLabel(selected).split(" ")[0]}⌄</Text><Text style={[styles.filterYear, { color: colors.textColor }]}>{currentYear}⌄</Text><Pressable onPress={() => setSelected((value) => shift(value, 1))}><Text style={[styles.arrow, { color: colors.textColor }]}>›</Text></Pressable></View>
+        <View style={styles.topBar}>
+          <Text style={[styles.menu, { color: colors.textColor }]}>☰</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.title, { color: colors.textColor }]}>Agenda Dividendos</Text>
+            <Text style={{ color: "#888", fontSize: 10, textAlign: "center" }}>{data.length} eventos no total</Text>
+          </View>
+          <Pressable onPress={onRefresh}>
+            <Text style={[styles.headerIcon, { color: colors.accent }]}>◉</Text>
+          </Pressable>
+          <Text style={[styles.search, { color: colors.textColor }]}>⌕</Text>
+        </View>
+        <View style={styles.filters}>
+          <Text style={[styles.filterFund, { color: colors.textColor }]}>▣  Meus FIIs⌄</Text>
+          <View style={{ flexDirection: "row", alignItems: "center", flex: 1.6 }}>
+            <Pressable onPress={prevMonth} hitSlop={10}><Text style={[styles.arrow, { color: colors.textColor }]}>‹</Text></Pressable>
+            <Text style={[styles.filterMonth, { color: colors.textColor, flex: 1 }]}>{monthLabel(selected).split(" ")[0]}</Text>
+            <Pressable onPress={nextMonth} hitSlop={10}><Text style={[styles.arrow, { color: colors.textColor }]}>›</Text></Pressable>
+          </View>
+          <View style={{ flexDirection: "row", alignItems: "center", flex: 1.4, marginLeft: 8 }}>
+            <Pressable onPress={() => shiftYear(-1)} hitSlop={10}><Text style={[styles.arrow, { color: colors.textColor }]}>‹</Text></Pressable>
+            <Text style={[styles.filterYear, { color: colors.textColor, flex: 1 }]}>{currentYearNum}</Text>
+            <Pressable onPress={() => shiftYear(1)} hitSlop={10}><Text style={[styles.arrow, { color: colors.textColor }]}>›</Text></Pressable>
+          </View>
+        </View>
 
         {/* Grade horizontal de meses (Jan, Fev, Mar...) */}
         <View style={{ height: 60, marginBottom: 6 }}>
@@ -98,7 +172,8 @@ export default function DividendsScreen() {
                 const mStr = String(i + 1).padStart(2, '0');
                 const keyToCheck = `${currentYear}-${mStr}`;
                 const isSelected = currentMonthNum === (i + 1);
-                const mesTotalVal = totalFor(data.filter((item) => item.paymentDate.slice(0, 7) === keyToCheck && (item.dateCom || item.source === "manual") && quantityAt(item.ticker, item.dateCom || item.paymentDate, operations) > 0));
+                const monthItems = data.filter((item) => (item.paymentDate || "").slice(0, 7) === keyToCheck);
+                const mesTotalVal = totalFor(monthItems);
 
                 return (
                   <Pressable key={nm} onPress={() => setSelected(keyToCheck)}
@@ -119,10 +194,20 @@ export default function DividendsScreen() {
       </View>}
       renderItem={({ item }) => <DividendTableRow item={item} operations={operations} colors={colors} />}
       ListEmptyComponent={<EmptyState title="Nenhum provento registrado" description="Ao sincronizar a carteira, os eventos encontrados serão preenchidos aqui usando as quantidades dos seus FIIs." action={<Button title="Registrar provento" onPress={() => router.push("/dividend-form" as any)} />} />}
-      ListFooterComponent={<View>
-        <View style={styles.totalLine}><Text style={[styles.totalLineText, { color: colors.textColor }]}>¹Total no mês: {currency(monthTotal)}</Text><Text style={[styles.info, { color: colors.accent }]}>●</Text></View>
-        <View style={[styles.note, { borderColor }]}><Text style={[styles.noteText, { color: colors.textColor }]}>¹ - Valores podem conter variações; ² - Quantidade do ativo na data-com; ³ - Data provável do pagamento.</Text></View>
-        <View style={[styles.sectionBar, styles.historyBar, { borderColor }]}><Text style={[styles.sectionTitle, { color: colors.textColor }]}>▥  Histórico: Meus FIIs</Text><Text style={[styles.chevron, { color: colors.accent }]}>›</Text></View>
+      ListFooterComponent={<View style={{ paddingBottom: 20 }}>
+        <View style={[styles.totalLine, { backgroundColor: "#17232C", padding: 12, borderRadius: 12, marginTop: 10 }]}>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.totalLineText, { color: colors.textColor, fontSize: 12 }]}>Total no mês</Text>
+            <Text style={[styles.totalLineText, { color: "#FFFFFF", fontSize: 18, fontWeight: "bold" }]}>{currency(monthTotal)}</Text>
+          </View>
+          <View style={{ width: 1, height: 30, backgroundColor: "#4A4D50", marginHorizontal: 15 }} />
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.totalLineText, { color: colors.accent, fontSize: 12 }]}>Acumulado Geral</Text>
+            <Text style={[styles.totalLineText, { color: colors.accent, fontSize: 18, fontWeight: "bold" }]}>{currency(historyTotal)}</Text>
+          </View>
+        </View>
+        <View style={[styles.note, { borderColor, marginTop: 15 }]}><Text style={[styles.noteText, { color: colors.textColor }]}>¹ - Valores baseados na sua posição na Data Com; ² - Se você comprou após a Data Com, o valor será zero.</Text></View>
+        <View style={[styles.sectionBar, styles.historyBar, { borderColor }]}><Text style={[styles.sectionTitle, { color: colors.textColor }]}>▥  Histórico: Meus FIIs</Text></View>
         <HistoryChart values={chart} colors={colors} />
         <Text style={[styles.footer, { color: colors.textColor }]}>Os valores podem variar e devem ser conferidos nos informes oficiais do fundo.</Text>
       </View>}

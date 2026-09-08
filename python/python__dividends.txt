@@ -1,0 +1,5 @@
+/python_dividends/
+├── wallet.json            # Histórico de compras/vendas (exportado do seu app)
+├── dividends_announcements.json # Avisos de proventos (coletados do bot/API)
+├── engine.py              # Script principal de cruzamento e cálculo
+└── proventos_out.json     # Saída pronta para o portifolio.ts ler

@@ -1,16 +1,3 @@
-from flask import Flask, jsonify, request
-from flask_cors import CORS
-import yfinance as yf
-import requests
-import os
-
-app = Flask(__name__)
-CORS(app)
-
-# Simulação de um banco local em memória ou arquivo (você pode plugar seu banco/JSON depois)
-# Armazena os dividendos já salvos para nunca apagar o que já foi preenchido
-HISTORICO_CACHE = {}
-
 def buscar_yfinance(simbolo, ticker):
     lista_divs = []
     try:
@@ -18,90 +5,42 @@ def buscar_yfinance(simbolo, ticker):
         dividends = ativo.dividends
         if dividends is not None and not dividends.empty:
             for data_idx, valor in dividends.items():
-                data_str = data_idx.strftime('%Y-%m-%d')
+                # Converte o timestamp do pandas para datetime e formata com barras
+                dt_obj = data_idx.to_pydatetime()
+                data_str = dt_obj.strftime('%d/%m/%Y')
+                
+                val_float = float(valor)
+                valor_formatado = f"R$ {val_float:.2f}".replace('.', ',')
                 lista_divs.append({
                     "ticker": ticker,
                     "dataCom": data_str,
                     "dataPagamento": data_str,
-                    "valorUnitario": float(valor),
+                    "valorUnitario": valor_formatado,
                     "tipo": "Rendimento",
                     "fonte": "yfinance"
                 })
     except Exception as e:
         print(f"Aviso [yfinance] para {ticker}: {e}")
     return lista_divs
+@app.route('/api/proventos-lote', methods=['GET'])
+def get_proventos_lote():
+    tickers_param = request.args.get('tickers', '').upper().strip()
+    if not tickers_param:
+        return jsonify({"error": "Nenhum ticker informado"}), 400
 
-def buscar_statusinvest_alternativo(ticker):
-    lista_divs = []
-    try:
-        # Exemplo de requisição a endpoint público alternativo de FIIs
-        url = f"https://statusinvest.com.br/fundos-imobiliarios/payoutresult?q={ticker}"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-        response = requests.get(url, headers=headers, timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            for item in data.get("list", []):
-                lista_divs.append({
-                    "ticker": ticker,
-                    "dataCom": item.get("addr", ""),
-                    "dataPagamento": item.get("payday", ""),
-                    "valorUnitario": float(item.get("value", 0)),
-                    "tipo": "Rendimento",
-                    "fonte": "statusinvest"
-                })
-    except Exception as e:
-        print(f"Aviso [Alternativo] para {ticker}: {e}")
-    return lista_divs
+    tickers_list = [t.strip() for t in tickers_param.split(',') if t.strip()]
+    todos_dividendos = []
 
-def consolidar_sem_apagar(ticker, novos_dados):
-    """
-    Garante que os dados novos sejam mesclados com os já existentes,
-    evitando duplicatas e NUNCA apagando registros anteriores.
-    """
-    if ticker not in HISTORICO_CACHE:
-        HISTORICO_CACHE[ticker] = []
-    
-    existentes = HISTORICO_CACHE[ticker]
-    
-    # Criamos um dicionário baseado em chave única (Data de Pagamento + Valor) para evitar duplicatas
-    mapa_unicos = {f"{d['dataPagamento']}_{d['valorUnitario']}": d for d in existentes}
-    
-    # Adiciona ou atualiza com os novos dados vindos de todas as fontes
-    for item in novos_dados:
-        chave = f"{item['dataPagamento']}_{item['valorUnitario']}"
-        if chave not in mapa_unicos:
-            mapa_unicos[chave] = item  # Insere se for novo, preservando os antigos
-
-    # Atualiza o cache com a lista unificada ordenada
-    lista_final = list(mapa_unicos.values())
-    lista_final.sort(key=lambda x: x["dataPagamento"])
-    
-    HISTORICO_CACHE[ticker] = lista_final
-    return lista_final
-
-@app.route('/api/proventos', methods=['GET'])
-def get_proventos():
-    ticker = request.args.get('ticker', '').upper().strip()
-    if not ticker:
-        return jsonify({"error": "Ticker não informado"}), 400
-
-    simbolo = ticker if ticker.endswith('.SA') else f"{ticker}.SA"
-    
-    # Executa todas as buscas em paralelo/sequência para juntar o máximo de dados possível
-    dados_yf = buscar_yfinance(simbolo, ticker)
-    dados_alt = buscar_statusinvest_alternativo(ticker)
-    
-    todas_fontes = dados_yf + dados_alt
-    
-    # Consolida preservando o histórico anterior
-    dados_consolidados = consolidar_sem_apagar(ticker, todas_fontes)
+    for ticker in tickers_list:
+        simbolo = ticker if ticker.endswith('.SA') else f"{ticker}.SA"
+        dados_yf = buscar_yfinance(simbolo, ticker)
+        dados_alt = buscar_statusinvest_alternativo(ticker)
+        
+        todas_fontes = dados_yf + dados_alt
+        dados_consolidados = consolidar_ses_apagar(ticker, todas_fontes)
+        todos_dividendos.extend(dados_consolidados)
 
     return jsonify({
-        "ticker": ticker,
-        "totalRegistros": len(dados_consolidados),
-        "dividends": dados_consolidados
+        "totalRegistros": len(todos_dividendos),
+        "dividends": todos_dividendos
     })
-
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)

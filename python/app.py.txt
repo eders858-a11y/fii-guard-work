@@ -1,4 +1,3 @@
-# Trecho atualizado para a rota Flask na Render (app.py)
 @app.route('/api/proventos-lote', methods=['GET'])
 def get_proventos_lote():
     tickers_param = request.args.get('tickers', '')
@@ -7,32 +6,42 @@ def get_proventos_lote():
     all_dividends = []
     
     for ticker_name in tickers:
-        try:
-            ticker_obj = yf.Ticker(ticker_name)
-            dividends_history = ticker_obj.dividends
+        dividends_history = None
+        
+        # Gera variações automáticas com e sem .SA para garantir a compatibilidade
+        variations = []
+        clean_name = ticker_name.replace('.SA', '')
+        variations.append(f"{clean_name}.SA")
+        variations.append(clean_name)
+        
+        # Tenta buscar em cada variação até encontrar dados válidos
+        for symbol in variations:
+            try:
+                ticker_obj = yf.Ticker(symbol)
+                hist = ticker_obj.dividends
+                if hist is not None and not hist.empty:
+                    dividends_history = hist
+                    break
+            except Exception:
+                continue
+        
+        if dividends_history is not None and not dividends_history.empty:
+            dividends_df = dividends_history.reset_index()
+            date_col = 'Date' if 'Date' in dividends_df.columns else dividends_df.columns[0]
+            val_col = 'Dividends' if 'Dividends' in dividends_df.columns else dividends_df.columns[1]
             
-            if dividends_history is not None and not dividends_history.empty:
-                dividends_df = dividends_history.reset_index()
-                # Identifica dinamicamente o nome da coluna de data (pode variar dependendo da versão do yfinance/pandas)
-                date_col = 'Date' if 'Date' in dividends_df.columns else dividends_df.columns[0]
-                val_col = 'Dividends' if 'Dividends' in dividends_df.columns else dividends_df.columns[1]
-                
-                dividends_df[date_col] = pd.to_datetime(dividends_df[date_col])
-                
-                # Ordena do mais antigo para o mais recente (ou vice-versa conforme sua preferência)
-                dividends_df = dividends_df.sort_values(by=date_col, ascending=True)
-                
-                for _, row in dividends_df.iterrows():
-                    d_val = float(row[val_col])
-                    if d_val > 0:  # Ignora valores zerados
-                        all_dividends.append({
-                            'ticker': ticker_name,
-                            'dataCom': row[date_col].strftime('%Y-%m-%d'),
-                            'dataPagamento': row[date_col].strftime('%Y-%m-%d'),
-                            'tipo': 'Rendimento',
-                            'valorUnitario': round(d_val, 4)
-                        })
-        except Exception as e:
-            print(f"Erro ao buscar proventos para {ticker_name}: {e}")
+            dividends_df[date_col] = pd.to_datetime(dividends_df[date_col])
+            dividends_df = dividends_df.sort_values(by=date_col, ascending=True)
             
+            for _, row in dividends_df.iterrows():
+                d_val = float(row[val_col])
+                if d_val > 0:  # Ignora valores zerados
+                    all_dividends.append({
+                        'ticker': clean_name,  # Mantém o ticker limpo padronizado para o app
+                        'dataCom': row[date_col].strftime('%Y-%m-%d'),
+                        'dataPagamento': row[date_col].strftime('%Y-%m-%d'),
+                        'tipo': 'Rendimento',
+                        'valorUnitario': round(d_val, 4)
+                    })
+                    
     return jsonify({"dividends": all_dividends}), 200

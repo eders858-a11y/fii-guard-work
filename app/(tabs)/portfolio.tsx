@@ -280,12 +280,17 @@ export default function PortfolioScreen() {
               style={({ pressed }) => [styles.assetRow, pressed && styles.pressed]}
             >
               <View style={styles.assetLeft}>
-                <Text style={styles.ticker}>{item.ticker}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                  <Text style={styles.ticker}>{item.ticker}</Text>
+                  <Text style={isLoss ? styles.loss : styles.gain}>
+                    {isLoss ? "▼ " : "▲ +"}{currency(item.unrealizedResult, { sign: true })}
+                  </Text>
+                </View>
                 <Text style={styles.sub}>
-                  {number(item.quantity, 0)} cotas · PM {currency(item.averagePrice)} · Cot. {currency(currentPrice)}
+                  {number(item.quantity, 0)} cotas · PM {currency(item.averagePrice)}
                 </Text>
-                <Text style={isLoss ? styles.loss : styles.gain}>
-                  {isLoss ? "▼ " : "▲ +"}{currency(item.unrealizedResult, { sign: true })}
+                <Text style={[styles.sub, { color: "#00E5FF", marginTop: 2 }]}>
+                  Cot. {currency(currentPrice)}
                 </Text>
               </View>
               <View style={styles.assetRight}>
@@ -398,7 +403,7 @@ const styles = StyleSheet.create({
     borderColor: "#293943",
     borderWidth: 1,
   },
-  assetLeft: { flex: 1, flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 8 },
+  assetLeft: { flex: 1, justifyContent: "center" },
   assetRight: { alignItems: "flex-end", justifyContent: "center", minWidth: 90 },
   ticker: { color: "#FFFFFF", fontSize: 14, fontWeight: "800" },
   sub: { color: "#FFD700", fontSize: 10, fontWeight: "700" },

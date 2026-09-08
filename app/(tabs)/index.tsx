@@ -2,7 +2,7 @@ import { router, Stack } from "expo-router";
 import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import Svg, { Circle } from "react-native-svg";
 import { useEffect, useRef } from "react";
-import { usePortfolio, monthReport } from "@/lib/portfolio";
+import { usePortfolio, monthReport, quantityAt } from "@/lib/portfolio";
 import { ScreenContainer } from "@/components/screen-container";
 import { Button, Card, EmptyState, LoadingState, Metric, SectionHeader } from "@/components/portfolio-ui";
 import { currency, dateTime, number } from "@/lib/format";
@@ -86,12 +86,17 @@ export default function HomeScreen() {
   const textColor = settings.textColor || "#FFFFFF";
   const topPositions = snapshot.active;
 
-  // Cálculos consolidados para a barra de resumo estilo referência
-  const totalProventosRecebidos = dividends.reduce((acc, d) => acc + (d.value * (d.quantity || 1)), 0) || report.incomeTotal + report.amortizationTotal;
+  // Cálculos consolidados usando a nova lógica do Snapshot
+  const totalProventosRecebidos = snapshot.totalDividends;
   const yieldOnCostCalc = snapshot.investedCost > 0 ? (totalProventosRecebidos / snapshot.investedCost) * 100 : 0;
-  const resultadoComProventos = snapshot.totalResult + totalProventosRecebidos;
+
+  // Lucro/Prejuízo da Carteira (Variação de preço + Vendas realizadas)
+  const lucroPuro = snapshot.totalResult;
+  const porcentagemLucro = snapshot.investedCost > 0 ? (lucroPuro / snapshot.investedCost) * 100 : 0;
+
+  // Lucro Total incluindo os Dividendos (Patrimônio Total)
+  const resultadoComProventos = lucroPuro + totalProventosRecebidos;
   const porcentagemComProventos = snapshot.investedCost > 0 ? (resultadoComProventos / snapshot.investedCost) * 100 : 0;
-  const porcentagemLucro = snapshot.investedCost > 0 ? (snapshot.totalResult / snapshot.investedCost) * 100 : 0;
 
   return (
     <ScreenContainer className="px-5" edges={["top", "left", "right"]}>
@@ -155,13 +160,17 @@ export default function HomeScreen() {
               </View>
             </View>
 
-            {/* BLOCO LADO A LADO: FIIs ATIVOS (13) & PROVENTOS DO MÊS */}
+            {/* BLOCO LADO A LADO: FIIs ATIVOS (13) & PROVENTOS DO MÊS - CORRIGIDO */}
             <View className="mt-4 flex-row gap-3">
               <View style={[styles.smallMetric, { backgroundColor: cardColor, borderColor: "#2c2c2c" }]}>
-                <Metric label="FIIs ativos" value={number(snapshot.fundCount, 0)} helper="posições" />
+                <Text style={styles.customCardLabel}>FIIs ativos</Text>
+                <Text style={[styles.customCardValue, { color: textColor }]}>{number(snapshot.fundCount, 0)}</Text>
+                <Text style={styles.customCardHelper}>posições</Text>
               </View>
               <View style={[styles.smallMetric, { backgroundColor: cardColor, borderColor: "#2c2c2c" }]}>
-                <Metric label="Proventos no mês" value={currency(report.incomeTotal + report.amortizationTotal)} tone="positive" helper="recebidos" />
+                <Text style={styles.customCardLabel}>Proventos no mês</Text>
+                <Text style={[styles.customCardValue, { color: "#00B894" }]}>{currency(report.incomeTotal + report.amortizationTotal)}</Text>
+                <Text style={styles.customCardHelper}>recebidos</Text>
               </View>
             </View>
 
@@ -268,6 +277,9 @@ const styles = StyleSheet.create({
   metricValue: { color: "#fff", fontSize: 13, fontWeight: "bold", marginTop: 2 },
   metricSubText: { fontSize: 11, marginTop: 2 },
   smallMetric: { borderRadius: 12, borderWidth: 1, flex: 1, padding: 14 },
+  customCardLabel: { color: "#888888", fontSize: 11, fontWeight: "600" },
+  customCardValue: { fontSize: 20, fontWeight: "bold", marginVertical: 4 },
+  customCardHelper: { color: "#718096", fontSize: 10 },
   chartsRow: { flexDirection: "row", gap: 10, marginTop: 10 },
   chartTitle: { fontSize: 14, fontWeight: "800" },
   donutWrap: { alignItems: "center", justifyContent: "center", marginVertical: 8, position: "relative" },
@@ -281,9 +293,8 @@ const styles = StyleSheet.create({
   tableHeader: { flexDirection: "row", backgroundColor: "#1a1a1a", paddingVertical: 10, paddingHorizontal: 8, borderTopLeftRadius: 6, borderTopRightRadius: 6, marginTop: 10 },
   th: { color: "#aaa", fontSize: 11, fontWeight: "bold" },
   tableRow: { flexDirection: "row", backgroundColor: "#1e1e1e", paddingVertical: 12, paddingHorizontal: 8, borderBottomWidth: 1, borderBottomColor: "#2c2c2c", alignItems: "center" },
-  tdTicker: { color: "#4dabf7", fontWeight: "bold", fontSize: 12 },
-  td: { color: "#fff", fontSize: 11 },
-  emptyButton: { width: "100%" },
-  footer: { color: "#718096", fontSize: 9, lineHeight: 15, marginTop: 18, textAlign: "center" },
-  pressed: { opacity: 0.7, transform: [{ scale: 0.99 }] }
+  td: { color: "#ddd", fontSize: 12 },
+  tdTicker: { color: "#fff", fontSize: 13, fontWeight: "bold" },
+  emptyButton: { marginTop: 12, width: "100%" },
+  footer: { color: "#666", fontSize: 11, textAlign: "center", marginTop: 20 }
 });
