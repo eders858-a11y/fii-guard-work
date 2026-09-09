@@ -1,0 +1,1 @@
+const TOKEN = "fZh138TebUi2JYGBJG75C6"; async function run() { const res = await fetch(`https://brapi.dev/api/v2/fii/dividends?symbols=VGIR11,RBRX11,HGLG11,HGBS11,MFII11&token=${TOKEN}`); const json = await res.json(); console.log(JSON.stringify(json, null, 2)); } run();

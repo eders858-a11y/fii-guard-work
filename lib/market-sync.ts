@@ -1,13 +1,14 @@
-import { NewDividend, Quote, normalizeTicker, toISO } from "./portfolio";
-import { BRAPI_TOKEN } from "./brapi-proventos";
+import { Platform } from 'react-native';
+import { Quote, NewDividend, normalizeTicker, toISO } from './portfolio';
 
-export type SyncResult = { quotes: Quote[]; dividends: NewDividend[]; message: string };
+export const BRAPI_TOKEN = 'fZh138TebUi2JYGBJG75C6';
+const CUSTOM_RENDER_API = 'https://fii-guard-work.onrender.com';
 
-async function fetchWithTimeout(url: string, options: any = {}, timeout = 10000) {
+async function fetchWithTimeout(url: string, timeoutMs = 20000): Promise<Response> {
   const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeout);
+  const id = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
+    const response = await fetch(url, { signal: controller.signal });
     clearTimeout(id);
     return response;
   } catch (e) {
@@ -16,74 +17,80 @@ async function fetchWithTimeout(url: string, options: any = {}, timeout = 10000)
   }
 }
 
-async function fetchPrices(tickers: string[], token?: string): Promise<Quote[]> {
-  const activeToken = token || (BRAPI_TOKEN && !BRAPI_TOKEN.startsWith("SEU_TOKEN") ? BRAPI_TOKEN : "");
-  const quotes: Quote[] = [];
-  if (activeToken) {
-    try {
-      const r = await fetchWithTimeout(`https://brapi.dev/api/quote/${tickers.join(",")}?token=${activeToken}`);
-      const j = await r.json();
-      (j.results || []).forEach((q: any) => {
-        if (q.regularMarketPrice) quotes.push({ ticker: normalizeTicker(q.symbol), price: q.regularMarketPrice, referenceDate: new Date().toISOString().slice(0, 10), updatedAt: new Date().toISOString() });
-      });
-    } catch {}
-  }
-  if (quotes.length === 0) {
-    for (const t of tickers) {
-      try {
-        const res = await fetchWithTimeout(`https://query1.finance.yahoo.com/v8/finance/chart/${t}.SA?interval=1d`);
-        const data = await res.json();
-        const p = data?.chart?.result?.[0]?.meta?.regularMarketPrice || data?.chart?.result?.[0]?.meta?.previousClose;
-        if (p) quotes.push({ ticker: normalizeTicker(t), price: Number(p), referenceDate: new Date().toISOString().slice(0, 10), updatedAt: new Date().toISOString() });
-      } catch {}
+// Limpeza ultra-segura para centavos (ex: 0,084)
+function parseLiteralValue(val: any): number {
+    let s = String(val || "0").replace(/R\$\s*/gi, "").replace(/\s/g, "");
+    if (s.includes(",")) {
+        if (s.split(",")[0].includes(".")) s = s.replace(/\./g, "");
+        s = s.replace(",", ".");
     }
-  }
-  return quotes;
+    const n = parseFloat(s);
+    return isNaN(n) ? 0 : n;
 }
 
-export async function syncMarket(serviceUrl: string | undefined, tickers: string[], since?: string, brapiToken?: string): Promise<SyncResult> {
-  const base = serviceUrl?.trim().replace(/\/$/, "");
-  let quotes: Quote[] = [];
-  let dividends: NewDividend[] = [];
-  let status = "";
+export async function syncMarket(
+  serviceUrl: string | undefined,
+  tickers: string[],
+  userOperations: any[] = [],
+  brapiToken?: string
+): Promise<{ quotes: Quote[]; dividends: NewDividend[]; message: string }> {
+  const activeToken = brapiToken || BRAPI_TOKEN;
+  const quotes: Quote[] = [];
+  const dividends: NewDividend[] = [];
 
-  if (base && base.includes("onrender.com")) {
-    try {
-      const url = `${base}/api/proventos-lote?tickers=${tickers.join(",")}`;
-      const res = await fetchWithTimeout(url, {}, 65000);
-      if (res.ok) {
-        const body = await res.json();
-        const raw: any[] = body.dividends || body.proventos || body.results || (Array.isArray(body) ? body : []);
+  if (!tickers || tickers.length === 0) return { quotes: [], dividends: [], message: "Sem ativos." };
 
-        dividends = raw.map((d: any) => {
-          const tk = normalizeTicker(d.ticker || d.symbol || d.Ticker || d.ativo || "");
+  // PROXY CORS PARA WEB
+  const isWeb = Platform.OS === 'web';
+  const corsProxy = isWeb ? 'https://corsproxy.io/?' : '';
 
-          // Limpeza robusta para formatos como "R$ 0,10" ou "0,10"
-          let valRaw = String(d.valorUnitario || d.rendimento || d.Rendimento || d.valor || d.amount || d.value || d.rate || "0");
-          valRaw = valRaw.replace(/R\$\s*/gi, "").replace(/\./g, "").replace(",", ".");
-          const valNum = parseFloat(valRaw);
+  try {
+    const url = `${corsProxy}https://brapi.dev/api/quote/${tickers.join(',')}?dividends=true&token=${activeToken}`;
+    const res = await fetchWithTimeout(url);
+    if (res.ok) {
+      const j = await res.json();
+      (j.results || []).forEach((q: any) => {
+        if (q.regularMarketPrice) quotes.push({ ticker: normalizeTicker(q.symbol), price: Number(q.regularMarketPrice), referenceDate: new Date().toISOString().slice(0, 10), updatedAt: new Date().toISOString() });
+        const divs = q.dividendsData?.cashDividends || [];
+        divs.forEach((d: any) => {
+           const rate = parseLiteralValue(d.rate || d.value);
+           if (rate > 0) {
+             dividends.push({
+               ticker: normalizeTicker(q.symbol),
+               amountPerShare: rate,
+               paymentDate: toISO(d.paymentDate || d.payDate || ""),
+               dateCom: toISO(d.lastDatePrior || d.dateCom || ""),
+               kind: String(d.label || "").toUpperCase().includes("AMORT") ? "amortization" : "income",
+               source: "brapi"
+             });
+           }
+        });
+      });
+    }
+  } catch {}
 
-          return {
-            ticker: tk,
-            paymentDate: toISO(d.dataPagamento || d.paymentDate || d.date),
-            dateCom: toISO(d.dataCom || d.dateCom || d.date),
-            amountPerShare: isNaN(valNum) ? 0 : valNum,
+  const baseUrl = (serviceUrl || CUSTOM_RENDER_API).trim().replace(/\/$/, "");
+  try {
+    const renderUrl = `${corsProxy}${baseUrl}/api/proventos-lote?tickers=${tickers.join(',')}`;
+    const resR = await fetchWithTimeout(renderUrl, 65000);
+    if (resR.ok) {
+      const body = await resR.json();
+      const raw = body.dividends || body.proventos || (Array.isArray(body) ? body : []);
+      raw.forEach((d: any) => {
+        const nVal = parseLiteralValue(d.valorUnitario || d.rendimento);
+        if (nVal > 0) {
+          dividends.push({
+            ticker: normalizeTicker(d.ticker || d.symbol || ""),
+            paymentDate: toISO(d.dataPagamento || d.paymentDate || ""),
+            dateCom: toISO(d.dataCom || d.dateCom || ""),
+            amountPerShare: nVal,
             kind: String(d.tipo || d.kind || "").toUpperCase().includes("AMORT") ? "amortization" : "income",
             source: "render"
-          };
-        }).filter(d => d.ticker && d.amountPerShare > 0);
-        status = `${dividends.length} proventos carregados. `;
-      }
-    } catch (e) { status = "Python offline. "; }
-  }
+          });
+        }
+      });
+    }
+  } catch (e) {}
 
-  const fallback = await fetchPrices(tickers, brapiToken);
-  if (quotes.length === 0) {
-    quotes = fallback;
-    status += "Preços OK.";
-  } else {
-    status += "Preços OK.";
-  }
-
-  return { quotes, dividends, message: status.trim() };
+  return { quotes, dividends, message: "Sincronizado." };
 }

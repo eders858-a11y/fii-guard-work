@@ -11,13 +11,14 @@ export type DarfMonth = {
   taxDue: number;
   lossCarry: number;
   hasSales: boolean;
+  details: { ticker: string; day: string; quantity: number; result: number }[];
 };
 
 type Balance = { quantity: number; costBasis: number };
 const cleanTicker = (value: string) => value.trim().toUpperCase().replace(/[^A-Z0-9]/g, "").replace(/SA$/, "");
 const ordered = (operations: Operation[]) => [...operations].sort((a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt));
 
-/** Apuração estimada de alienações de FIIs, com compensação de prejuízo acumulado. */
+/** Apuração estimada de alienações de FIIs, com detalhamento por transação. */
 export function calculateDarfYear(operations: Operation[], year: number): DarfMonth[] {
   const rows = Array.from({ length: 12 }, (_, index) => ({
     key: `${year}-${String(index + 1).padStart(2, "0")}`,
@@ -30,7 +31,9 @@ export function calculateDarfYear(operations: Operation[], year: number): DarfMo
     taxDue: 0,
     lossCarry: 0,
     hasSales: false,
+    details: [] as { ticker: string; day: string; quantity: number; result: number }[],
   }));
+
   const balances = new Map<string, Balance>();
   let lossCarry = 0;
 
@@ -38,6 +41,7 @@ export function calculateDarfYear(operations: Operation[], year: number): DarfMo
     const ticker = cleanTicker(operation.ticker);
     const balance = balances.get(ticker) ?? { quantity: 0, costBasis: 0 };
     const total = operation.quantity * operation.price;
+
     if (operation.kind === "buy") {
       balance.costBasis += total + operation.fees;
       balance.quantity += operation.quantity;
@@ -47,12 +51,21 @@ export function calculateDarfYear(operations: Operation[], year: number): DarfMo
       const result = total - operation.fees - allocatedCost;
       const key = operation.date.slice(0, 7);
       const row = rows.find((item) => item.key === key);
+
       if (row) {
         row.hasSales = true;
         row.grossSales += total;
         row.saleCosts += operation.fees;
         row.costBasisSold += allocatedCost;
         row.realizedResult += result;
+
+        // Registra cada transação de venda individualmente
+        row.details.push({
+          ticker,
+          day: operation.date.split('-')[2] || "01",
+          quantity: operation.quantity,
+          result
+        });
       }
       balance.costBasis = Math.max(0, balance.costBasis - allocatedCost);
       balance.quantity = Math.max(0, balance.quantity - operation.quantity);

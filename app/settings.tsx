@@ -14,11 +14,13 @@ export default function SettingsScreen() {
   const {
     settings,
     updateSettings,
+    syncMarket,
     syncMarketData,
     exportData,
     importData,
     importB3,
     clearManualOperations,
+    clearB3Operations,
   } = usePortfolio();
 
   const [url, setUrl] = useState(settings.marketServiceUrl);
@@ -70,7 +72,13 @@ export default function SettingsScreen() {
     try {
       setBusy(true);
       if (!save()) return;
-      await syncMarketData();
+      if (typeof syncMarket === "function") {
+        await syncMarket();
+      } else if (typeof syncMarketData === "function") {
+        await syncMarketData();
+      } else {
+        throw new Error("Função de sincronização de mercado não encontrada.");
+      }
       Alert.alert(
         "Atualização",
         "Consulta concluída. Confira a hora e a mensagem abaixo."
@@ -141,17 +149,26 @@ export default function SettingsScreen() {
 
   const clearManual = () =>
     Alert.alert(
-      "Remover lançamentos manuais?",
-      "Esta ação remove somente operações manuais e preserva todas as operações importadas da B3. Use-a para retirar operações de demonstração ou lançamentos cadastrados por engano.",
+      "O que você deseja remover?",
+      "Escolha se quer apagar os lançamentos feitos à mão ou os importados pelo extrato da B3.",
       [
         { text: "Cancelar", style: "cancel" },
         {
-          text: "Remover manuais",
+          text: "Remover Manuais",
           style: "destructive",
           onPress: () =>
             Alert.alert(
               "Limpeza concluída",
               `${clearManualOperations()} lançamentos manuais removidos.`
+            ),
+        },
+        {
+          text: "Remover B3",
+          style: "destructive",
+          onPress: () =>
+            Alert.alert(
+              "Limpeza concluída",
+              `${clearB3Operations()} lançamentos da B3 removidos.`
             ),
         },
       ]
@@ -292,7 +309,7 @@ export default function SettingsScreen() {
           <View className="mt-5 gap-3">
             <Button title="Importar planilha da B3 (XLS/XLSX/XLSM)" onPress={importB3File} />
             <Button
-              title="Remover somente lançamentos manuais"
+              title="Limpar carteira (Manuais / B3)"
               variant="secondary"
               onPress={clearManual}
             />

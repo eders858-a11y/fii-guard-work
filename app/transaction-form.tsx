@@ -119,19 +119,21 @@ export default function TransactionForm() {
 
         {preview ? (
           <Card className="mb-4" style={{ backgroundColor: "#EBF8FF", borderColor: "#3182CE", borderWidth: 2, padding: 18 }}>
-            <Text style={{ color: "#2C5282", fontSize: 11, fontWeight: "900", textTransform: "uppercase", letterSpacing: 2 }}>Prévia automática</Text>
+            <Text style={{ color: "#2C5282", fontSize: 11, fontWeight: "900", textTransform: "uppercase", letterSpacing: 2 }}>Resumo da Operação</Text>
             <View className="mt-4 flex-row justify-between">
               <View style={{ flex: 1 }}>
-                <Text style={{ color: "#2D3748", fontSize: 11, fontWeight: "700" }}>Cotas</Text>
-                <Text style={{ color: "#000000", fontSize: 20, fontWeight: "900", marginTop: 4 }}>{number(preview.quantity)}</Text>
+                <Text style={{ color: "#2D3748", fontSize: 11, fontWeight: "700" }}>Quantidade</Text>
+                <Text style={{ color: "#000000", fontSize: 18, fontWeight: "900", marginTop: 4 }}>{number(Number(quantity.replace(",", ".")), 0)}</Text>
               </View>
               <View style={{ flex: 1.2 }}>
-                <Text style={{ color: "#2D3748", fontSize: 11, fontWeight: "700" }}>PM Estimado</Text>
-                <Text style={{ color: "#000000", fontSize: 20, fontWeight: "900", marginTop: 4 }}>{currency(preview.averagePrice)}</Text>
+                <Text style={{ color: "#2D3748", fontSize: 11, fontWeight: "700" }}>Vl. Unitário</Text>
+                <Text style={{ color: "#000000", fontSize: 18, fontWeight: "900", marginTop: 4 }}>{currency(parseCurrencyInput(price))}</Text>
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={{ color: "#2D3748", fontSize: 11, fontWeight: "700" }}>Custo Total</Text>
-                <Text style={{ color: "#000000", fontSize: 20, fontWeight: "900", marginTop: 4 }}>{currency(preview.costBasis)}</Text>
+                <Text style={{ color: "#2D3748", fontSize: 11, fontWeight: "700" }}>Total Operação</Text>
+                <Text style={{ color: "#000000", fontSize: 18, fontWeight: "900", marginTop: 4 }}>
+                  {currency((Number(quantity.replace(",", ".")) * parseCurrencyInput(price)) + parseCurrencyInput(fees))}
+                </Text>
               </View>
             </View>
           </Card>

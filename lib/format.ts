@@ -3,7 +3,7 @@ const MONTHS_BR = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "
 export function currency(value: number | undefined, options?: { sign?: boolean }) {
   if (value === undefined || !Number.isFinite(value)) return "R$ 0,00";
   const val = Math.abs(value).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const sign = value < 0 ? "-" : (options?.sign && value > 0 ? "+" : "");
+  const sign = value < 0 ? "-" : "";
   return `${sign}R$ ${val}`;
 }
 

@@ -1,7 +1,7 @@
 export type FundSuggestion = {
   ticker: string;
   name: string;
-  sector: "Fundo de papel" | "Fundo de tijolo" | "Infraestrutura" | "Fundo de fundos";
+  sector: "Fundo de papel" | "Fundo de tijolo" | "Infraestrutura" |"Hibrido Papel" | "Fundo de fundos";
   segment: string
 };
 
@@ -28,7 +28,7 @@ const rows: [string, string, FundSuggestion["sector"], string][] = [
   ["RBRR11", "RBR High Yield", "Fundo de papel", "Papéis IPCA"],
   ["RECR11", "REC Recebíveis Imobiliários", "Fundo de papel", "Papéis IPCA"],
   ["HCTR11", "Hectare CE", "Fundo de papel", "Papéis High Yield"],
-  ["VSLH11", "Versalhes Recebíveis", "Fundo de papel", "Papéis High Yield"],
+  ["VGHF11", "Valora Hedge", "Fundo de papel", "Papéis Hibrido"],
   ["TGLT11", "TG Fundo de Papel", "Fundo de papel", "Papéis IPCA"],
   ["BARI11", "Barigui Rendimentos", "Fundo de papel", "Papéis IPCA"],
   ["CLIN11", "Sparta CRI", "Fundo de papel", "Papéis CDI"],
@@ -100,7 +100,7 @@ export function findFund(ticker: string) {
       ticker: cleanTicker,
       name: cleanTicker,
       sector: "Fundo de papel" as const,
-      segment: "Não classificado"
+      segment: "Papel CDI/IPCA"
     };
   }
   return undefined;

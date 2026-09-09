@@ -124,6 +124,43 @@ def get_proventos_lote():
         "status": "2026_OK"
     })
 
+@app.route('/relatorios', methods=['GET'])
+def get_relatorios():
+    tickers_param = request.args.get('tickers', '').upper().strip()
+    if not tickers_param:
+        return jsonify({"error": "Nenhum ticker informado"}), 400
+
+    # Token padrão (mesmo do app)
+    token = "fZh138TebUi2JYGBJG75C6"
+    url = f"https://brapi.dev/api/v2/fii/reports?symbols={tickers_param}&token={token}"
+    
+    try:
+        response = requests.get(url, timeout=15)
+        if response.status_code == 200:
+            data = response.json()
+            relatorios_finais = []
+            
+            for result in data.get("results", []):
+                ticker = result.get("symbol", "")
+                for report in result.get("reports", []):
+                    relatorios_finais.append({
+                        "id": str(report.get("id", "")),
+                        "ticker": ticker,
+                        "titulo": report.get("category", "Comunicado"),
+                        "subtitulo": report.get("label", "Informe Oficial"),
+                        "dataEntrega": report.get("deliveryDate", ""),
+                        "dataReferencia": report.get("referenceDate", ""),
+                        "protocoloId": str(report.get("id", ""))
+                    })
+            
+            # Ordena por data de entrega decrescente
+            relatorios_finais.sort(key=lambda x: x['dataEntrega'], reverse=True)
+            return jsonify(relatorios_finais)
+        else:
+            return jsonify({"error": "Falha na fonte de dados"}), response.status_code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/')
 def home():
     return "FII Guard API - Online"
