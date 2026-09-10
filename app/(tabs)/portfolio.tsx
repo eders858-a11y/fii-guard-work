@@ -200,6 +200,8 @@ function getNormalizedCategory(ticker: string, field: "sector" | "segment", rawV
     upperTicker.startsWith("HGLG") ||
     upperTicker.startsWith("HGBS") ||
     upperTicker.startsWith("HSML") ||
+    upperTicker.startsWith("GARE") ||
+    upperTicker.startsWith("GALG") ||
     upperTicker.startsWith("BTLG");
 
   const isDevelopment =
@@ -214,7 +216,8 @@ function getNormalizedCategory(ticker: string, field: "sector" | "segment", rawV
 
   if (field === "segment") {
     if (isDevelopment) return "Desenv.";
-    if (rawText.includes("LOGÍSTICA") || upperTicker.startsWith("HGLG") || upperTicker.startsWith("BTLG")) return "Logística";
+    if (rawText.includes("LOGÍSTICA") || upperTicker.startsWith("HGLG") || upperTicker.startsWith("BTLG") || upperTicker.startsWith("GALG")) return "Logística";
+    if (rawText.includes("RENDA URBANA") || upperTicker.startsWith("GARE") || upperTicker.startsWith("HGRU")) return "Renda Urbana";
     if (rawText.includes("SHOPPING") || upperTicker.startsWith("HGBS") || upperTicker.startsWith("HSML")) return "Shopping";
     if (rawText.includes("LAJES") || rawText.includes("CORPORATIVAS")) return "Lajes Corp.";
     if (isPaper) return "Recebíveis Imob.";

@@ -29,6 +29,17 @@ export function mesAnoKey(ano: number, mes1a12: number) {
   return `${ano}-${String(mes1a12).padStart(2, '0')}`;
 }
 
+function parseLiteralValue(val: any): number {
+  if (typeof val === 'number') return val;
+  let s = String(val || "0").replace(/R\$\s*/gi, "").replace(/\s/g, "");
+  if (s.includes(",")) {
+    if (s.split(",")[0].includes(".")) s = s.replace(/\./g, "");
+    s = s.replace(",", ".");
+  }
+  const n = parseFloat(s);
+  return isNaN(n) ? 0 : n;
+}
+
 function parseDateAny(v: any): string | null {
   if (!v) return null;
   if (typeof v === 'string') {
@@ -114,7 +125,7 @@ async function fetchFromRenderApi(tickers: string[]): Promise<Record<string, Pro
           const sym = String(d.ticker ?? d.symbol ?? t).toUpperCase();
           if (!sym) continue;
 
-          const rate = Number(d.valorUnitario ?? d.rate ?? 0);
+          const rate = parseLiteralValue(d.valorUnitario ?? d.rate ?? 0);
           const dataCom = parseDateAny(d.dataCom ?? d.dateCom);
           const dataPgto = parseDateAny(d.dataPagamento ?? d.paymentDate);
           if (!rate || !(dataCom || dataPgto)) continue;
@@ -203,6 +214,23 @@ export async function fetchProventosCarteira(
   }
 
   return out;
+}
+
+export async function fetchRelatorios(tickers: string[]): Promise<any[]> {
+  const cleanBase = CUSTOM_RENDER_API.trim().replace(/\/$/, "");
+  if (!tickers.length) return [];
+
+  try {
+    const symbols = tickers.map(t => t.toUpperCase()).join(',');
+    const url = `${cleanBase}/relatorios?tickers=${encodeURIComponent(symbols)}`;
+    const r = await fetchWithTimeout(url);
+    if (r.ok) {
+      return await r.json();
+    }
+  } catch (err) {
+    console.warn('Erro ao buscar relatórios na API:', err);
+  }
+  return [];
 }
 
 export function mediaHistorica(proventos: ProventoBrapi[], ultimos = 3): number {

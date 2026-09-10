@@ -8,7 +8,14 @@ async function fetchWithTimeout(url: string, timeoutMs = 20000): Promise<Respons
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'Accept': 'application/json',
+        // Essencial para o APK não ser bloqueado como "bot" pelos servidores de cotação
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36'
+      }
+    });
     clearTimeout(id);
     return response;
   } catch (e) {
@@ -40,17 +47,24 @@ export async function syncMarket(
 
   if (!tickers || tickers.length === 0) return { quotes: [], dividends: [], message: "Sem ativos." };
 
-  // PROXY CORS PARA WEB
   const isWeb = Platform.OS === 'web';
   const corsProxy = isWeb ? 'https://corsproxy.io/?' : '';
 
+  // 1. TENTA BRAPI (PREÇOS + DIVIDENDOS)
   try {
     const url = `${corsProxy}https://brapi.dev/api/quote/${tickers.join(',')}?dividends=true&token=${activeToken}`;
     const res = await fetchWithTimeout(url);
     if (res.ok) {
       const j = await res.json();
       (j.results || []).forEach((q: any) => {
-        if (q.regularMarketPrice) quotes.push({ ticker: normalizeTicker(q.symbol), price: Number(q.regularMarketPrice), referenceDate: new Date().toISOString().slice(0, 10), updatedAt: new Date().toISOString() });
+        if (q.regularMarketPrice) {
+          quotes.push({
+            ticker: normalizeTicker(q.symbol),
+            price: Number(q.regularMarketPrice),
+            referenceDate: new Date().toISOString().slice(0, 10),
+            updatedAt: new Date().toISOString()
+          });
+        }
         const divs = q.dividendsData?.cashDividends || [];
         divs.forEach((d: any) => {
            const rate = parseLiteralValue(d.rate || d.value);
@@ -67,12 +81,17 @@ export async function syncMarket(
         });
       });
     }
-  } catch {}
+  } catch (e) {
+    console.warn("[BRAPI] Falha na busca");
+  }
 
+  // 2. TENTA SERVIDOR LOCAL/CUSTOM (DIVIDENDOS EM LOTE)
   const baseUrl = (serviceUrl || CUSTOM_RENDER_API).trim().replace(/\/$/, "");
   try {
     const renderUrl = `${corsProxy}${baseUrl}/api/proventos-lote?tickers=${tickers.join(',')}`;
-    const resR = await fetchWithTimeout(renderUrl, 65000);
+    console.log(`[SYNC] Chamando: ${renderUrl}`);
+
+    const resR = await fetchWithTimeout(renderUrl, 45000); // 45s agora é suficiente devido ao paralelismo
     if (resR.ok) {
       const body = await resR.json();
       const raw = body.dividends || body.proventos || (Array.isArray(body) ? body : []);
@@ -89,8 +108,35 @@ export async function syncMarket(
           });
         }
       });
+    } else {
+      console.warn(`[SYNC] Servidor respondeu erro: ${resR.status}`);
     }
-  } catch (e) {}
+  } catch (e) {
+    console.warn(`[SYNC] Não foi possível conectar ao servidor: ${baseUrl}`);
+    throw new Error(`Servidor Offline: Verifique se o Python está rodando e a URL está correta.`);
+  }
+
+  // 3. FALLBACK DE COTAÇÕES (YAHOO) - SÓ ENTRA SE A BRAPI NÃO RETORNAR PREÇOS
+  // Não afeta os dividendos, apenas garante que o valor da carteira atualize no APK
+  if (quotes.length === 0) {
+    for (const t of tickers) {
+      try {
+        const resY = await fetchWithTimeout(`https://query1.finance.yahoo.com/v8/finance/chart/${t}.SA?interval=1d`, 5000);
+        if (resY.ok) {
+          const dataY = await resY.json();
+          const p = dataY?.chart?.result?.[0]?.meta?.regularMarketPrice || dataY?.chart?.result?.[0]?.meta?.previousClose;
+          if (p) {
+            quotes.push({
+              ticker: normalizeTicker(t),
+              price: Number(p),
+              referenceDate: new Date().toISOString().slice(0, 10),
+              updatedAt: new Date().toISOString()
+            });
+          }
+        }
+      } catch {}
+    }
+  }
 
   return { quotes, dividends, message: "Sincronizado." };
 }

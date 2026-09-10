@@ -155,7 +155,7 @@ export default function DividendForm() {
             label="Valor por cota"
             value={amount}
             onChangeText={(value) => setAmount(currencyInput(value))}
-            placeholder="0,00"
+            placeholder="0,000"
             keyboardType="numeric"
           />
           <Help>Digite 083 para R$ 0,83 ou 7295 para R$ 72,95.</Help>

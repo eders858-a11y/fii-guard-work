@@ -22,7 +22,13 @@ export type NewDividend = Omit<Dividend, "id" | "createdAt" | "source"> & { sour
 const KEY = "@fii-guard/portfolio-v2";
 const initial: PortfolioData = { operations: [], dividends: [], quotes: {}, settings: { marketServiceUrl: "", brapiToken: "", themeName: "Oceano", cardColor: "#303234", textColor: "#F5F7FA", autoSync: true } };
 const now = () => new Date().toISOString();
-export const normalizeTicker = (value: string) => value?.trim().toUpperCase().replace(/[^A-Z0-9]/g, "").replace(/SA$/, "") || "";
+export const normalizeTicker = (value: string) => {
+  if (!value) return "";
+  let tk = value.trim().toUpperCase().replace(/[^A-Z0-9]/g, "").replace(/SA$/, "");
+  // MAPEAMENTO DE TICKERS QUE MUDARAM (Garante consistência na carteira)
+  if (tk === "GALG11") return "GARE11";
+  return tk;
+};
 const id = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 export function toISO(d: string): string {
@@ -82,6 +88,7 @@ export function quantityAt(operations: Operation[], ticker: string, date: string
 
 export function valueOfDividend(dividend: Dividend, operations: Operation[]) {
   const q = quantityAt(operations, dividend.ticker, dividend.dateCom || dividend.paymentDate);
+  // CÁLCULO REAL SEM ARREDONDAMENTO CONFORME PEDIDO
   return (dividend.amountPerShare || 0) * q;
 }
 
@@ -89,7 +96,15 @@ export function snapshot(operations: Operation[] = [], quotes: Record<string, Qu
   const positions = calculatePositions(operations, quotes);
   const active = positions.filter(p => p.quantity > 0.01);
   const totalDividends = (dividends || []).reduce((s, d) => s + valueOfDividend(d, operations), 0);
-  return { active, marketValue: active.reduce((s,p) => s + (p.marketValue || 0), 0), investedCost: active.reduce((s,p) => s + (p.costBasis || 0), 0), totalResult: active.reduce((s,p) => s + (p.unrealizedResult || 0), 0) + positions.reduce((s,p) => s + p.realizedResult, 0), totalDividends, fundCount: active.length, positions };
+  return {
+    active,
+    marketValue: active.reduce((s,p) => s + (p.marketValue || 0), 0),
+    investedCost: active.reduce((s,p) => s + (p.costBasis || 0), 0),
+    totalResult: active.reduce((s,p) => s + (p.unrealizedResult || 0), 0) + positions.reduce((s,p) => s + p.realizedResult, 0),
+    totalDividends,
+    fundCount: active.length,
+    positions
+  };
 }
 
 export function monthReport(operations: Operation[] = [], dividends: Dividend[] = [], key: string) {
@@ -102,10 +117,12 @@ export function monthReport(operations: Operation[] = [], dividends: Dividend[] 
     const incomeTotal = (dividends || []).filter(d => toISO(d.paymentDate) >= start && toISO(d.paymentDate) <= end && d.kind === "income").reduce((s, d) => s + valueOfDividend(d, operations), 0);
     const amortizationTotal = (dividends || []).filter(d => toISO(d.paymentDate) >= start && d.paymentDate <= end && d.kind === "amortization").reduce((s, d) => s + valueOfDividend(d, operations), 0);
     const purchaseTotal = items.filter(i => i.kind === "buy").reduce((sum, i) => sum + (i.quantity * i.price) + (i.fees || 0), 0);
-    const saleTotal = items.filter(i => i.kind === "sell").reduce((sum, i) => sum + (i.quantity * i.price) - (i.fees || 0), 0);
+    const saleTotal = items.filter(i => i.kind === "sell").reduce((sum, i) => sum + (i.quantity * i.price) - i.fees, 0);
+
     const before = calculatePositions((operations || []).filter(o => toISO(o.date) < start), {});
     const through = calculatePositions((operations || []).filter(o => toISO(o.date) <= end), {});
     const realizedResult = through.reduce((s,p) => s + p.realizedResult, 0) - before.reduce((s,p) => s + p.realizedResult, 0);
+
     return { key, incomeTotal, amortizationTotal, purchaseTotal, saleTotal, movementCount: items.length, realizedResult, netCashFlow: (purchaseTotal + incomeTotal + amortizationTotal) - saleTotal };
   } catch (e) { return { key, incomeTotal: 0, amortizationTotal: 0, purchaseTotal: 0, saleTotal: 0, movementCount: 0, realizedResult: 0, netCashFlow: 0 }; }
 }
@@ -123,8 +140,18 @@ export function PortfolioProvider({ children }: PropsWithChildren) {
   const [data, setData] = useState<PortfolioData>(initial);
   const [ready, setReady] = useState(false);
   const syncRef = useRef(false);
+  const dataRef = useRef(data);
 
-  useEffect(() => { AsyncStorage.getItem(KEY).then(raw => raw && setData({ ...initial, ...JSON.parse(raw) })).finally(() => setReady(true)); }, []);
+  useEffect(() => { dataRef.current = data; }, [data]);
+
+  useEffect(() => {
+    AsyncStorage.getItem(KEY).then(raw => {
+      if (raw) {
+        let parsed = JSON.parse(raw);
+        setData({ ...initial, ...parsed });
+      }
+    }).finally(() => setReady(true));
+  }, []);
 
   useEffect(() => {
     if (ready) {
@@ -137,18 +164,80 @@ export function PortfolioProvider({ children }: PropsWithChildren) {
     if (syncRef.current) return;
     syncRef.current = true;
     try {
-      const tickers = customTickers || [...new Set((data.operations || []).map(o => normalizeTicker(o.ticker)))].filter(Boolean);
-      if (!tickers.length) return;
-      const res = await syncMarket(data.settings.marketServiceUrl, tickers, undefined, data.settings.brapiToken);
+      const currentData = dataRef.current;
+
+      // BUSCA INTELIGENTE: Pega apenas FIIs que estão na sua carteira (active positions)
+      const snapshots = snapshot(currentData.operations, currentData.quotes, currentData.dividends);
+      const tickers = customTickers || snapshots.active.map(p => p.ticker);
+
+      if (!tickers.length) {
+          syncRef.current = false;
+          return;
+      }
+
+      console.log(`[SYNC] Atualizando apenas ativos da carteira: ${tickers.join(", ")}`);
+
+      const res = await syncMarket(currentData.settings.marketServiceUrl, tickers, undefined, currentData.settings.brapiToken);
       if (res) {
           setData(prev => {
-              const existing = prev.dividends || [];
-              const unique = res.dividends.filter(n => !existing.some(e => e.ticker === n.ticker && e.paymentDate === n.paymentDate && Math.abs(e.amountPerShare - n.amountPerShare) < 0.0001));
-              return { ...prev, quotes: { ...prev.quotes, ...Object.fromEntries(res.quotes.map(q => [normalizeTicker(q.ticker), q])) }, dividends: [...existing, ...unique], settings: { ...prev.settings, lastSyncAt: now(), lastSyncMessage: res.message } };
+              const existingDivs = prev.dividends || [];
+              const rawIncoming = res.dividends.map(d => prepareDividend(d));
+
+              // DEDUPLICA INCOMING: Sempre mantém o maior valor para o mesmo dia/fundo
+              const incomingMap = new Map<string, Dividend>();
+              rawIncoming.forEach(n => {
+                  const key = `${normalizeTicker(n.ticker)}-${toISO(n.paymentDate)}-${n.kind}`;
+                  const existing = incomingMap.get(key);
+                  if (!existing || n.amountPerShare > existing.amountPerShare) {
+                      incomingMap.set(key, n);
+                  }
+              });
+              const incoming = Array.from(incomingMap.values());
+
+              // ATUALIZAÇÃO AGRESSIVA: Substitui se o novo for diferente ou se for um anúncio inédito
+              const cleanedExisting = existingDivs.filter(e => {
+                  const tk = normalizeTicker(e.ticker);
+                  const incomingDestaData = incoming.find(n =>
+                      normalizeTicker(n.ticker) === tk &&
+                      toISO(n.paymentDate) === toISO(e.paymentDate) &&
+                      n.kind === e.kind
+                  );
+
+                  // Se o servidor mandou um valor para esta data, removemos o antigo para entrar o novo (mais preciso ou atualizado)
+                  if (incomingDestaData) {
+                      return false; // Remove o antigo
+                  }
+                  return true; // Mantém se o servidor não mandou nada para este dia
+              });
+
+              // Pega tudo o que o servidor mandou e que não é exatamente igual ao que sobrou
+              const finalNew = incoming.filter(n =>
+                !cleanedExisting.some(e =>
+                    normalizeTicker(e.ticker) === normalizeTicker(n.ticker) &&
+                    toISO(e.paymentDate) === toISO(n.paymentDate) &&
+                    e.kind === n.kind &&
+                    Math.abs(n.amountPerShare - e.amountPerShare) < 0.00001
+                )
+              );
+
+              const updatedQuotes = { ...prev.quotes };
+              res.quotes.forEach(q => {
+                  updatedQuotes[normalizeTicker(q.ticker)] = q;
+              });
+
+              return {
+                  ...prev,
+                  quotes: updatedQuotes,
+                  dividends: [...cleanedExisting, ...finalNew],
+                  settings: { ...prev.settings, lastSyncAt: now(), lastSyncMessage: res.message }
+              };
           });
       }
+    } catch (e: any) {
+      console.warn("Falha na sincronização:", e.message);
+      throw e;
     } finally { syncRef.current = false; }
-  }, [data.operations, data.settings]);
+  }, []);
 
   const value = useMemo(() => ({
     ...data, ready, snapshot: snapshot(data.operations, data.quotes, data.dividends),
@@ -163,35 +252,28 @@ export function PortfolioProvider({ children }: PropsWithChildren) {
     importB3: async (mode: "merge" | "update" = "merge") => {
       const imp = await importB3Spreadsheet();
       if (!imp) return null;
-
-      const newOps = imp.operations.map(o => prepareOperation(o));
-      const newDivs = imp.dividends.map(d => prepareDividend(d));
-
-      let imported = 0;
-      let duplicates = 0;
-
+      let count = 0;
       setData(p => {
         const prevOps = p.operations || [];
         const prevDivs = p.dividends || [];
+        const newOps = imp.operations.map(o => prepareOperation(o));
+        const newDivs = imp.dividends.map(d => prepareDividend(d));
         const uniqueOps = newOps.filter(n => !prevOps.some(e => normalizeTicker(e.ticker) === normalizeTicker(n.ticker) && toISO(e.date) === toISO(n.date) && e.kind === n.kind && Math.abs(e.quantity - n.quantity) < 0.001 && Math.abs(e.price - n.price) < 0.01));
-        const uniqueDivs = newDivs.filter(n => !prevDivs.some(e => normalizeTicker(e.ticker) === normalizeTicker(n.ticker) && toISO(e.paymentDate) === toISO(n.paymentDate) && Math.abs(e.amountPerShare - n.amountPerShare) < 0.0001));
-
-        imported = uniqueOps.length + uniqueDivs.length;
-        duplicates = (newOps.length + newDivs.length) - imported;
-
+        const uniqueDivs = newDivs.filter(n => !prevDivs.some(e => normalizeTicker(e.ticker) === normalizeTicker(n.ticker) && toISO(e.paymentDate) === toISO(n.paymentDate) && e.kind === n.kind && Math.abs(e.amountPerShare - n.amountPerShare) < 0.0001));
+        count = uniqueOps.length;
         return { ...p, operations: mode === "merge" ? [...newOps] : [...prevOps, ...uniqueOps], dividends: mode === "merge" ? [...newDivs] : [...prevDivs, ...uniqueDivs] };
       });
-      return { imported, duplicates, warnings: imp.warnings || [] };
+      return { imported: count, duplicates: 0, warnings: [] };
     },
     clearManualOperations: () => {
-        const opsToRemove = (data.operations || []).filter(op => op.source !== "b3");
+        const count = (data.operations || []).filter(op => op.source !== "b3").length;
         setData(p => ({ ...p, operations: (p.operations || []).filter(op => op.source === "b3") }));
-        return opsToRemove.length;
+        return count;
     },
     clearB3Operations: () => {
-        const opsToRemove = (data.operations || []).filter(op => op.source === "b3");
+        const count = (data.operations || []).filter(op => op.source === "b3").length;
         setData(p => ({ ...p, operations: (p.operations || []).filter(op => op.source !== "b3") }));
-        return opsToRemove.length;
+        return count;
     },
     clearManualDividends: () => {
         setData(p => ({ ...p, dividends: (p.dividends || []).filter(d => d.source === "b3" || d.source === "render" || d.source === "brapi") }));
@@ -219,6 +301,7 @@ function prepareOperation(input: NewOperation, original?: Operation): Operation 
 function prepareDividend(input: NewDividend, original?: Dividend): Dividend {
   const ticker = normalizeTicker(input.ticker);
   const amount = Number(input.amountPerShare || 0);
+
   const paymentDate = toISO(input.paymentDate);
   if (!ticker || !paymentDate || amount <= 0) throw new Error("Dados de provento inválidos.");
   const rawKind = String(input.kind || "income").toLowerCase();

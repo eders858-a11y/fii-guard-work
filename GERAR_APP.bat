@@ -4,14 +4,19 @@ echo    GERANDO APK DO FIIS GUARD (PRODUCAO)
 echo ==========================================
 echo.
 
+echo Destravando arquivos (Limpando processos Java/Gradle)...
+taskkill /f /im java.exe >nul 2>&1
+taskkill /f /im node.exe >nul 2>&1
+
 cd android
 set NODE_ENV=production
 set CI=1
 
+echo.
 echo Limpando builds anteriores...
-if exist ".gradle" rd /s /q .gradle
-if exist "app\.cxx" rd /s /q app\.cxx
-if exist "app\build" rd /s /q app\build
+if exist ".gradle" rd /s /q .gradle >nul 2>&1
+if exist "app\.cxx" rd /s /q app\.cxx >nul 2>&1
+if exist "app\build" rd /s /q app\build >nul 2>&1
 call gradlew clean
 
 echo.
@@ -53,6 +58,6 @@ if exist "%ARQ_ORIGINAL%" (
 )
 
 echo.
-echo Processo concluido! Verifique sua Area de Trabalho.
+echo Processo concluido!
 echo Pressione qualquer tecla para fechar...
 pause

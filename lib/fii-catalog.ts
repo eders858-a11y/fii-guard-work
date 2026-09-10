@@ -68,6 +68,7 @@ const rows: [string, string, FundSuggestion["sector"], string][] = [
   ["BLMG11", "Blueming Logística", "Fundo de tijolo", "Logística"],
   ["EDGA11", "Edifício Galeria", "Fundo de tijolo", "Lajes corporativas"],
   ["TRXF11", "TRX Real Estate", "Fundo de tijolo", "Renda urbana"],
+  ["GARE11", "Guardiã Real Estate", "Fundo de tijolo", "Renda urbana"],
   ["HGBS11", "Hedge Brasil Shopping", "Fundo de tijolo", "Shoppings"],
 
   // --- FUNDOS DE FUNDOS (FOFs) ---

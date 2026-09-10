@@ -4,5 +4,5 @@
     runtime: python
     rootDir: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
+    startCommand: gunicorn server:app
     plan: free

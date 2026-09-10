@@ -26,11 +26,14 @@ function DividendTableRow({ item, operations, colors }: { item: Dividend; operat
 
   return (
     <View style={[styles.row, { borderBottomColor: "#4A4D50" }, isPaymentDay && { backgroundColor: "rgba(0, 166, 199, 0.15)" }]}>
-      <Text style={[styles.dateCell, { color: colors.textColor }]}>
-        {unitValue > 0 ? date(item.paymentDate) : "—"}
-      </Text>
+      <View style={styles.dateCell}>
+        <Text style={{ color: colors.textColor, fontSize: 9 }}>{date(item.paymentDate)}</Text>
+        {item.dateCom && item.dateCom !== item.paymentDate && (
+          <Text style={{ color: "#888", fontSize: 7 }}>Com: {date(item.dateCom)}</Text>
+        )}
+      </View>
       <Text style={[styles.tickerCell, { color: colors.textColor }]}>{item.ticker}</Text>
-      <Text style={[styles.kindCell, { color: colors.textColor }]}>{item.kind === "income" ? "Rendimento" : "Amortização"}</Text>
+      <Text style={[styles.kindCell, { color: colors.textColor }]}>{item.kind === "income" ? "Rend." : "Amort."}</Text>
       <Text style={[styles.quantityCell, { color: colors.textColor }]}>{quantity || "—"}</Text>
       <Text numberOfLines={1} adjustsFontSizeToFit style={[styles.unitCell, { color: colors.textColor }]}>
         {unitValue > 0 ? unitValue.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 4 }) : "—"}
@@ -101,8 +104,11 @@ export default function DividendsScreen() {
 
   const dataSorted = useMemo(() => {
     const unique = new Map();
-    dividends.forEach(d => {
-       const key = `${d.ticker}-${d.paymentDate}-${d.amountPerShare}`;
+    // Ordenamos para que o valor mais alto ou mais recente (maior ID ou createdAt) prevaleça no Map
+    const sorted = [...dividends].sort((a, b) => (b.amountPerShare || 0) - (a.amountPerShare || 0));
+
+    sorted.forEach(d => {
+       const key = `${normalizeTicker(d.ticker)}-${d.paymentDate}`;
        if (!unique.has(key)) unique.set(key, d);
     });
     return Array.from(unique.values()).sort((a, b) => b.paymentDate.localeCompare(a.paymentDate));

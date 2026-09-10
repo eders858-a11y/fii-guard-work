@@ -1,62 +1,86 @@
 import { router, Stack, useLocalSearchParams } from "expo-router";
-import { Pressable, ScrollView, Text, View } from "react-native";
-import { useMemo, useState } from "react";
-import { usePortfolio, calculatePositions, normalizeTicker } from "@/lib/portfolio";
-import { suggestFunds, findFund } from "@/lib/fii-catalog";
+import { ScrollView, Text, View, Pressable, ActivityIndicator } from "react-native";
+import { useState, useEffect } from "react";
+import { usePortfolio } from "@/lib/portfolio";
+import { suggestFunds } from "@/lib/fii-catalog";
 import { ScreenContainer } from "@/components/screen-container";
 import { Field, Help } from "@/components/form-fields";
-import { Button, Card } from "@/components/portfolio-ui";
-import { brDateToIso, currency, currencyInput, isoDateToBr, number, parseCurrencyInput } from "@/lib/format";
-const dateInput = (value: string) => { const digits = value.replace(/\D/g, "").slice(0, 8); return digits.length <= 2 ? digits : digits.length <= 4 ? `${digits.slice(0, 2)}/${digits.slice(2)}` : `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`; };
-const today = isoDateToBr(new Date().toISOString().slice(0, 10));
-export default function TransactionForm() {
-  const params = useLocalSearchParams<{ ticker?: string; id?: string }>();
-  const { operations, quotes, addOperation, updateOperation } = usePortfolio();
-  const old = operations.find((item) => item.id === params.id);
+import { Button } from "@/components/portfolio-ui";
+import { brDateToIso, currencyInput, isoDateToBr, parseCurrencyInput } from "@/lib/format";
 
-  const [kind, setKind] = useState<"buy" | "sell">(old?.kind ?? "buy");
+const dateInput = (value: string) => {
+  const digits = value.replace(/\D/g, "").slice(0, 8);
+  return digits.length <= 2
+    ? digits
+    : digits.length <= 4
+    ? `${digits.slice(0, 2)}/${digits.slice(2)}`
+    : `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+};
+
+const today = isoDateToBr(new Date().toISOString().slice(0, 10));
+
+export default function DividendForm() {
+  const params = useLocalSearchParams<{ ticker?: string; id?: string }>();
+  const { dividends, addDividend, updateDividend } = usePortfolio();
+  const old = dividends.find((item) => item.id === params.id);
+  const [kind, setKind] = useState<"income" | "amortization">(old?.kind ?? "income");
   const [ticker, setTicker] = useState(old?.ticker ?? params.ticker ?? "");
-  const [showSuggestions, setShowSuggestions] = useState(false);
-  const [date, setDate] = useState(old ? isoDateToBr(old.date) : today);
-  const [quantity, setQuantity] = useState(old ? String(old.quantity) : "");
-  const [price, setPrice] = useState(old ? currencyInput(String(Math.round(old.price * 100))) : "");
-  const [fees, setFees] = useState(old ? currencyInput(String(Math.round(old.fees * 100))) : "");
+  const [paymentDate, setPaymentDate] = useState(old ? isoDateToBr(old.paymentDate) : today);
+  const [dateCom, setDateCom] = useState(old?.dateCom ? isoDateToBr(old.dateCom) : "");
+  const [amount, setAmount] = useState(old ? currencyInput(String(Math.round(old.amountPerShare * 100))) : "");
   const [note, setNote] = useState(old?.note ?? "");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const selected = suggestFunds(ticker);
 
-  const suggestions = useMemo(() => {
-    if (!showSuggestions || ticker.length < 1) return [];
-    return suggestFunds(ticker);
-  }, [ticker, showSuggestions]);
+  // Busca dados da API quando o ticker tiver 6 caracteres
+  useEffect(() => {
+    const cleanTicker = ticker.trim().toUpperCase();
+    if (old || cleanTicker.length !== 6) return;
 
-  const selected = findFund(ticker);
-  const normalized = normalizeTicker(ticker);
-  const quote = quotes[normalized];
+    let isMounted = true;
+    const fetchDividendData = async () => {
+      try {
+        setLoading(true);
+        // Substitua pelo endpoint real da sua API de dividendos
+        const res = await fetch(`https://api.exemplo.com/fii/${cleanTicker}/latest-dividend`);
+        if (!res.ok) return;
 
-  const preview = useMemo(() => {
-    const q = Number(quantity.replace(",", "."));
-    const p = parseCurrencyInput(price);
-    const f = parseCurrencyInput(fees);
-    const operationDate = brDateToIso(date);
-    if (!normalized || q <= 0 || p <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(operationDate)) return null;
-    const base = old ? operations.filter((item) => item.id !== old.id) : operations;
-    const [position] = calculatePositions([...base, { id: "preview", ticker: normalized, kind, date: operationDate, quantity: q, price: p, fees: f, createdAt: "9999" }], quotes);
-    return position ?? null;
-  }, [date, fees, kind, normalized, old, operations, price, quantity, quotes]);
+        const data = await res.json();
+        if (isMounted && data) {
+          if (data.paymentDate) setPaymentDate(isoDateToBr(data.paymentDate));
+          if (data.dateCom) setDateCom(isoDateToBr(data.dateCom));
+          if (data.amountPerShare) {
+            setAmount(currencyInput(String(Math.round(data.amountPerShare * 100))));
+          }
+        }
+      } catch {
+        // Em caso de falha na requisição, permite o preenchimento manual
+      } finally {
+        if (isMounted) setLoading(false);
+      }
+    };
 
-  const choose = (choice: string) => {
-    setTicker(choice);
-    setShowSuggestions(false);
-    const current = quotes[choice];
-    if (current && !old) setPrice(currencyInput(String(Math.round(current.price * 100))));
-  };
+    const timer = setTimeout(fetchDividendData, 400);
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
+  }, [ticker, old]);
 
   const save = () => {
     try {
       setError("");
-      const input = { ticker, kind, date: brDateToIso(date), quantity: Number(quantity.replace(",", ".")), price: parseCurrencyInput(price), fees: parseCurrencyInput(fees), note: note.trim() || undefined };
-      if (old) updateOperation(old.id, input);
-      else addOperation(input);
+      const input = {
+        ticker,
+        kind,
+        paymentDate: brDateToIso(paymentDate),
+        dateCom: dateCom ? brDateToIso(dateCom) : undefined,
+        amountPerShare: parseCurrencyInput(amount),
+        note: note.trim() || undefined,
+      };
+      if (old) updateDividend(old.id, input);
+      else addDividend(input);
       router.back();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Não foi possível salvar.");
@@ -66,84 +90,88 @@ export default function TransactionForm() {
   return (
     <ScreenContainer className="px-5" edges={["top", "bottom", "left", "right"]}>
       <Stack.Screen options={{ headerShown: false }} />
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerClassName="pb-8" keyboardShouldPersistTaps="handled">
-        <Text className="mt-2 text-sm font-medium text-muted">Lançamento inteligente</Text>
-        <Text className="mt-1 text-3xl font-bold text-foreground">{old ? "Editar movimentação" : "Nova movimentação"}</Text>
-        <Text className="mt-3 text-sm leading-5 text-muted">O app sugere o FII e recalcula o PM conforme você digita.</Text>
-
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerClassName="pb-6">
+        <Text className="mt-2 text-sm font-medium text-muted">Recebimento manual</Text>
+        <Text className="mt-1 text-3xl font-bold text-foreground">
+          {old ? "Editar provento" : "Novo provento"}
+        </Text>
+        <Text className="mt-3 text-sm leading-5 text-muted">
+          O total será calculado pela quantidade de cotas na data-com.
+        </Text>
         <View className="mt-6 flex-row gap-3 rounded-2xl bg-surface p-2">
-          <View className="flex-1"><Button compact title="Compra" variant={kind === "buy" ? "primary" : "secondary"} onPress={() => setKind("buy")} /></View>
-          <View className="flex-1"><Button compact title="Venda" variant={kind === "sell" ? "primary" : "secondary"} onPress={() => setKind("sell")} /></View>
+          <View className="flex-1">
+            <Button
+              compact
+              title="Rendimento"
+              variant={kind === "income" ? "primary" : "secondary"}
+              onPress={() => setKind("income")}
+            />
+          </View>
+          <View className="flex-1">
+            <Button
+              compact
+              title="Amortização"
+              variant={kind === "amortization" ? "primary" : "secondary"}
+              onPress={() => setKind("amortization")}
+            />
+          </View>
         </View>
-
         <View className="mt-6">
           <Field
             label="Ticker do FII"
             value={ticker}
-            onChangeText={(v) => { setTicker(v); setShowSuggestions(true); }}
-            placeholder="Ex: MXRF11"
+            onChangeText={setTicker}
+            placeholder="Ex.: HGLG11"
             autoCapitalize="characters"
           />
-
-          {suggestions.length > 0 && (
-            <View className="-mt-3 mb-3 rounded-xl border border-slate-300 bg-white shadow-xl overflow-hidden" style={{ zIndex: 100 }}>
-              {suggestions.map((fund) => (
-                <Pressable
-                  key={fund.ticker}
-                  onPress={() => choose(fund.ticker)}
-                  style={({ pressed }) => ({
-                    backgroundColor: pressed ? "#E2E8F0" : "#FFFFFF",
-                    borderBottomColor: "#CBD5E0",
-                    borderBottomWidth: 1,
-                    paddingHorizontal: 16,
-                    paddingVertical: 14
-                  })}
-                >
-                  <Text style={{ color: "#000000", fontSize: 18, fontWeight: "bold" }}>{fund.ticker}</Text>
-                  <Text style={{ color: "#4A5568", fontSize: 12, fontWeight: "600" }}>{fund.name} · {fund.segment}</Text>
-                </Pressable>
-              ))}
+          {loading ? (
+            <View className="-mt-2 mb-3 flex-row items-center gap-2 px-1">
+              <ActivityIndicator size="small" />
+              <Text className="text-xs text-muted">Buscando dados na API...</Text>
             </View>
-          )}
-
-          {selected ? <Text className="mb-4 text-xs font-medium text-primary">{selected.name} · {selected.segment}{quote ? ` · última cotação ${currency(quote.price)}` : ""}</Text> : null}
-
-          <Field label="Data da operação" value={date} onChangeText={(value) => setDate(dateInput(value))} placeholder="DD/MM/AAAA" />
-          <Help>Use o formato DD/MM/AAAA.</Help>
-          <Field label="Quantidade de cotas" value={quantity} onChangeText={setQuantity} placeholder="0" keyboardType="numeric" />
-          <Field label="Preço por cota" value={price} onChangeText={(value) => setPrice(currencyInput(value))} placeholder="0,00" keyboardType="numeric" />
-          <Help>Digite os centavos sem pontuação: 7295 vira 72,95.</Help>
-          <Field label="Taxas" value={fees} onChangeText={(value) => setFees(currencyInput(value))} placeholder="0,00" keyboardType="numeric" optional />
-          <Field label="Observação" value={note} onChangeText={setNote} placeholder="Opcional" optional autoCapitalize="sentences" />
+          ) : null}
+          {selected.slice(0, 4).map((fund) => (
+            <Pressable key={fund.ticker} onPress={() => setTicker(fund.ticker)}>
+              <Text className="-mt-2 mb-3 rounded-xl bg-[#DFF4FA] p-3 text-xs text-foreground">
+                {fund.ticker} · {fund.name}
+              </Text>
+            </Pressable>
+          ))}
+          <Field
+            label="Data de pagamento"
+            value={paymentDate}
+            onChangeText={(value) => setPaymentDate(dateInput(value))}
+            placeholder="DD/MM/AAAA"
+          />
+          <Field
+            label="Data-com"
+            value={dateCom}
+            onChangeText={(value) => setDateCom(dateInput(value))}
+            placeholder="DD/MM/AAAA"
+            optional
+          />
+          <Help>Se a data-com ficar vazia, será usada a data do pagamento.</Help>
+          <Field
+            label="Valor por cota"
+            value={amount}
+            onChangeText={(value) => setAmount(currencyInput(value))}
+            placeholder="0,000"
+            keyboardType="numeric"
+          />
+          <Help>Digite 083 para R$ 0,83 ou 7295 para R$ 72,95.</Help>
+          <Field
+            label="Observação"
+            value={note}
+            onChangeText={setNote}
+            placeholder="Opcional"
+            optional
+            autoCapitalize="sentences"
+          />
         </View>
-
-        {preview ? (
-          <Card className="mb-4" style={{ backgroundColor: "#EBF8FF", borderColor: "#3182CE", borderWidth: 2, padding: 18 }}>
-            <Text style={{ color: "#2C5282", fontSize: 11, fontWeight: "900", textTransform: "uppercase", letterSpacing: 2 }}>Resumo da Operação</Text>
-            <View className="mt-4 flex-row justify-between">
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: "#2D3748", fontSize: 11, fontWeight: "700" }}>Quantidade</Text>
-                <Text style={{ color: "#000000", fontSize: 18, fontWeight: "900", marginTop: 4 }}>{number(Number(quantity.replace(",", ".")), 0)}</Text>
-              </View>
-              <View style={{ flex: 1.2 }}>
-                <Text style={{ color: "#2D3748", fontSize: 11, fontWeight: "700" }}>Vl. Unitário</Text>
-                <Text style={{ color: "#000000", fontSize: 18, fontWeight: "900", marginTop: 4 }}>{currency(parseCurrencyInput(price))}</Text>
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: "#2D3748", fontSize: 11, fontWeight: "700" }}>Total Operação</Text>
-                <Text style={{ color: "#000000", fontSize: 18, fontWeight: "900", marginTop: 4 }}>
-                  {currency((Number(quantity.replace(",", ".")) * parseCurrencyInput(price)) + parseCurrencyInput(fees))}
-                </Text>
-              </View>
-            </View>
-          </Card>
-        ) : null}
-
         {error ? (
           <Text className="mb-4 rounded-xl bg-error/10 p-3 text-sm text-error">{error}</Text>
         ) : null}
-
-        <Button title={old ? "Salvar alterações" : "Salvar movimentação"} onPress={save} />
+        <Button title={old ? "Salvar alterações" : "Salvar provento"} onPress={save} />
         <View className="h-4" />
         <Button title="Cancelar" variant="secondary" onPress={() => router.back()} />
       </ScrollView>
