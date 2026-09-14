@@ -1,0 +1,4 @@
+- [ ] Fix syntax error in `android/build.gradle`
+- [ ] Fix `clearManualOperations` and `clearB3Operations` in `lib/portfolio.ts`
+- [ ] Fix manual dividend tagging in `prepareDividend` (`lib/portfolio.ts`)
+- [ ] Verify build and deletion logic
