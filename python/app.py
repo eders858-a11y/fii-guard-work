@@ -13,7 +13,7 @@ def get_proventos():
         simbolo = ticker if '.' in ticker else f"{ticker}.SA"
         ativo = yf.Ticker(simbolo)
         divs = ativo.dividends
-        
+
         lista_divs = []
         if not divs.empty:
             for data, valor in divs.items():
@@ -25,7 +25,7 @@ def get_proventos():
                     'valorUnitario': float(valor),
                     'tipo': 'Rendimento'
                 })
-        
+
         return jsonify({'dividends': lista_divs})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -44,7 +44,7 @@ def get_proventos_lote():
             simbolo = ticker if '.' in ticker else f"{ticker}.SA"
             ativo = yf.Ticker(simbolo)
             divs = ativo.dividends
-            
+
             if not divs.empty:
                 for data, valor in divs.items():
                     data_str = data.strftime('%Y-%m-%d')
@@ -59,6 +59,52 @@ def get_proventos_lote():
             continue
 
     return jsonify({'dividends': resultado_geral})
+
+
+# NOVA ROTA: COTAÇÃO ATUAL DO FII
+@app.route('/api/cotacao/<ticker>', methods=['GET'])
+def get_cotacao(ticker):
+    ticker = ticker.upper().strip()
+
+    try:
+        simbolo = ticker if '.' in ticker else f"{ticker}.SA"
+        ativo = yf.Ticker(simbolo)
+
+        preco = None
+
+        try:
+            preco = ativo.fast_info.get('lastPrice')
+        except Exception:
+            pass
+
+        if preco is None:
+            try:
+                preco = ativo.info.get('regularMarketPrice')
+            except Exception:
+                pass
+
+        if preco is None:
+            return jsonify({
+                'ticker': ticker,
+                'price': None,
+                'status': 'ERRO',
+                'message': 'Cotacao nao encontrada'
+            }), 404
+
+        return jsonify({
+            'ticker': ticker,
+            'price': float(preco),
+            'status': 'OK'
+        })
+
+    except Exception as e:
+        return jsonify({
+            'ticker': ticker,
+            'price': None,
+            'status': 'ERRO',
+            'message': str(e)
+        }), 500
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
