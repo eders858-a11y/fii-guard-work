@@ -249,30 +249,50 @@ def buscar_proventos_yfinance(ticker):
 def buscar_todos_proventos(ticker):
     ticker = ticker.upper().strip()
 
+    # Busca nas duas fontes
     fundamentus_divs = buscar_proventos_fundamentus(ticker)
     yfinance_divs = buscar_proventos_yfinance(ticker)
 
     todas_fontes = fundamentus_divs + yfinance_divs
 
-    # Consolida pelo ANO + MÊS.
-    # Fundamentus normalmente informa a data-com real.
-    # YFinance pode informar o primeiro dia do mês.
+    # ============================================================
+    # CONSOLIDAÇÃO
+    #
+    # REGRA:
+    # 1. Um único provento por ANO + MÊS
+    # 2. O MAIOR valor numérico entre as fontes é utilizado
+    # 3. Se existir Fundamentus no mês:
+    #       - mantém Data COM do Fundamentus
+    #       - mantém Data de Pagamento do Fundamentus
+    #       - usa o maior valor encontrado
+    # 4. Se não existir Fundamentus:
+    #       - utiliza o registro do yfinance
+    # ============================================================
+
     consolidados = {}
 
     for item in todas_fontes:
         ticker_item = item.get("ticker", ticker)
         data_com = item.get("dataCom")
         valor = item.get("valorUnitario")
+        fonte = item.get("fonte", "desconhecida")
 
         if not data_com or valor is None:
             continue
 
+        # Converte somente para comparação.
+        # Não arredonda o valor.
         try:
             valor = float(valor)
         except Exception:
             continue
 
-        # Data esperada: YYYY-MM-DD
+        if valor <= 0:
+            continue
+
+        # --------------------------------------------------------
+        # Agrupa por ANO + MÊS da Data COM
+        # --------------------------------------------------------
         partes = str(data_com).split("-")
 
         if len(partes) >= 2:
@@ -282,40 +302,69 @@ def buscar_todos_proventos(ticker):
 
         chave = (ticker_item, chave_mes)
 
+        # --------------------------------------------------------
+        # Primeiro registro encontrado
+        # --------------------------------------------------------
         if chave not in consolidados:
-            consolidados[chave] = item
+            consolidados[chave] = {
+                "registro": item.copy(),
+                "maiorValor": valor,
+                "temFundamentus": fonte == "Fundamentus"
+            }
             continue
 
-        existente = consolidados[chave]
+        atual = consolidados[chave]
 
-        try:
-            valor_existente = float(
-                existente.get("valorUnitario", 0)
-            )
-        except Exception:
-            valor_existente = 0
-
-        # REGRA PRINCIPAL:
-        # Se houver mais de uma fonte para o mesmo mês,
-        # fica sempre o MAIOR valor.
-        if valor > valor_existente:
+        # --------------------------------------------------------
+        # Verifica se encontrou valor maior
+        # --------------------------------------------------------
+        if valor > atual["maiorValor"]:
             print(
                 f"[MAIOR VALOR] {ticker_item} "
                 f"{chave_mes}: "
-                f"{valor_existente} -> {valor} "
-                f"({item.get('fonte', 'desconhecida')})"
+                f"{atual['maiorValor']} -> {valor} "
+                f"({fonte})"
             )
 
-            consolidados[chave] = item
+            atual["maiorValor"] = valor
 
-    resultado = list(consolidados.values())
+        # --------------------------------------------------------
+        # Fundamentus tem prioridade para as DATAS
+        #
+        # Mesmo que o yfinance tenha o valor maior,
+        # NÃO substituímos o registro inteiro.
+        # Apenas atualizamos o valor.
+        # --------------------------------------------------------
+        if fonte == "Fundamentus":
+            if not atual["temFundamentus"]:
+                atual["registro"] = item.copy()
+                atual["temFundamentus"] = True
 
+        # --------------------------------------------------------
+        # O valor final sempre será o MAIOR encontrado
+        # --------------------------------------------------------
+        atual["registro"]["valorUnitario"] = atual["maiorValor"]
+
+    # ============================================================
+    # Monta resultado final
+    # ============================================================
+
+    resultado = [
+        dados["registro"]
+        for dados in consolidados.values()
+    ]
+
+    # Ordena pela Data COM e depois pela Data de Pagamento
     resultado.sort(
         key=lambda x: (
             x.get("dataCom") or "",
             x.get("dataPagamento") or ""
         )
     )
+
+    # ============================================================
+    # LOG FINAL
+    # ============================================================
 
     fontes = set(
         item.get("fonte", "")
@@ -329,6 +378,17 @@ def buscar_todos_proventos(ticker):
         f"| fontes finais: "
         f"{', '.join(fontes) or 'nenhuma'}"
     )
+
+    # Mostra os resultados finais para conferência
+    for item in resultado:
+        print(
+            f"[PROVENTO FINAL] "
+            f"{item.get('ticker')} | "
+            f"COM={item.get('dataCom')} | "
+            f"PAG={item.get('dataPagamento')} | "
+            f"VALOR={item.get('valorUnitario')} | "
+            f"FONTE={item.get('fonte')}"
+        )
 
     return resultado
 # ============================================================
