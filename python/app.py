@@ -249,7 +249,10 @@ def buscar_proventos_yfinance(ticker):
 def buscar_todos_proventos(ticker):
     ticker = ticker.upper().strip()
 
-    # Busca nas duas fontes
+    # ============================================================
+    # BUSCA NAS DUAS FONTES
+    # ============================================================
+
     fundamentus_divs = buscar_proventos_fundamentus(ticker)
     yfinance_divs = buscar_proventos_yfinance(ticker)
 
@@ -258,30 +261,53 @@ def buscar_todos_proventos(ticker):
     # ============================================================
     # CONSOLIDAÇÃO
     #
-    # REGRA:
-    # 1. Um único provento por ANO + MÊS
-    # 2. O MAIOR valor numérico entre as fontes é utilizado
-    # 3. Se existir Fundamentus no mês:
-    #       - mantém Data COM do Fundamentus
-    #       - mantém Data de Pagamento do Fundamentus
-    #       - usa o maior valor encontrado
-    # 4. Se não existir Fundamentus:
-    #       - utiliza o registro do yfinance
+    # REGRA PRINCIPAL:
+    # 1. Um único provento por:
+    #       TICKER + ANO/MÊS DA DATA DE PAGAMENTO + TIPO
+    #
+    # 2. Se duas fontes representarem o mesmo provento,
+    #    fica somente um registro.
+    #
+    # 3. O MAIOR valor numérico encontrado é utilizado.
+    #
+    # 4. Se existir Fundamentus, suas datas são preservadas.
+    #
+    # Isso evita, por exemplo:
+    #
+    # Fundamentus:
+    # 31/08/2026 -> pagamento 08/09/2026 -> R$ 0,083
+    #
+    # yfinance:
+    # 01/09/2026 -> pagamento 01/09/2026 -> R$ 0,083
+    #
+    # Os dois pertencem a SETEMBRO/2026 e representam
+    # o mesmo provento.
     # ============================================================
 
     consolidados = {}
 
     for item in todas_fontes:
-        ticker_item = item.get("ticker", ticker)
+        ticker_item = str(
+            item.get("ticker", ticker)
+        ).upper().strip()
+
         data_com = item.get("dataCom")
+        data_pagamento = item.get("dataPagamento")
         valor = item.get("valorUnitario")
+        tipo = str(
+            item.get("tipo", "Rendimento")
+        ).strip()
+
         fonte = item.get("fonte", "desconhecida")
 
-        if not data_com or valor is None:
+        if not data_com or not data_pagamento or valor is None:
             continue
 
-        # Converte somente para comparação.
-        # Não arredonda o valor.
+        # --------------------------------------------------------
+        # Converte valor somente para comparação.
+        # Não arredonda.
+        # --------------------------------------------------------
+
         try:
             valor = float(valor)
         except Exception:
@@ -291,37 +317,67 @@ def buscar_todos_proventos(ticker):
             continue
 
         # --------------------------------------------------------
-        # Agrupa por ANO + MÊS da Data COM
+        # Normaliza data de pagamento
         # --------------------------------------------------------
-        partes = str(data_com).split("-")
 
-        if len(partes) >= 2:
-            chave_mes = f"{partes[0]}-{partes[1]}"
+        data_pagamento_str = str(data_pagamento)
+
+        partes_pagamento = data_pagamento_str.split("-")
+
+        if len(partes_pagamento) >= 2:
+            ano_mes_pagamento = (
+                f"{partes_pagamento[0]}-"
+                f"{partes_pagamento[1]}"
+            )
         else:
-            chave_mes = str(data_com)
+            ano_mes_pagamento = data_pagamento_str
 
-        chave = (ticker_item, chave_mes)
+        # --------------------------------------------------------
+        # Normaliza tipo
+        # --------------------------------------------------------
+
+        tipo_normalizado = tipo.upper()
+
+        if "AMORT" in tipo_normalizado:
+            tipo_chave = "AMORTIZATION"
+        else:
+            tipo_chave = "INCOME"
+
+        # --------------------------------------------------------
+        # CHAVE FINAL
+        #
+        # Ticker + mês do pagamento + tipo
+        # --------------------------------------------------------
+
+        chave = (
+            ticker_item,
+            ano_mes_pagamento,
+            tipo_chave
+        )
 
         # --------------------------------------------------------
         # Primeiro registro encontrado
         # --------------------------------------------------------
+
         if chave not in consolidados:
             consolidados[chave] = {
                 "registro": item.copy(),
                 "maiorValor": valor,
                 "temFundamentus": fonte == "Fundamentus"
             }
+
             continue
 
         atual = consolidados[chave]
 
         # --------------------------------------------------------
-        # Verifica se encontrou valor maior
+        # Se encontrou valor maior, utiliza o maior valor.
         # --------------------------------------------------------
+
         if valor > atual["maiorValor"]:
             print(
                 f"[MAIOR VALOR] {ticker_item} "
-                f"{chave_mes}: "
+                f"{ano_mes_pagamento}: "
                 f"{atual['maiorValor']} -> {valor} "
                 f"({fonte})"
             )
@@ -329,24 +385,29 @@ def buscar_todos_proventos(ticker):
             atual["maiorValor"] = valor
 
         # --------------------------------------------------------
-        # Fundamentus tem prioridade para as DATAS
+        # Fundamentus tem prioridade para as DATAS.
         #
-        # Mesmo que o yfinance tenha o valor maior,
-        # NÃO substituímos o registro inteiro.
-        # Apenas atualizamos o valor.
+        # Se o primeiro registro foi yfinance e depois encontramos
+        # Fundamentus, substituímos o registro pelas datas do
+        # Fundamentus.
         # --------------------------------------------------------
+
         if fonte == "Fundamentus":
+
             if not atual["temFundamentus"]:
                 atual["registro"] = item.copy()
                 atual["temFundamentus"] = True
 
         # --------------------------------------------------------
-        # O valor final sempre será o MAIOR encontrado
+        # O valor final sempre será o maior encontrado.
         # --------------------------------------------------------
-        atual["registro"]["valorUnitario"] = atual["maiorValor"]
+
+        atual["registro"]["valorUnitario"] = (
+            atual["maiorValor"]
+        )
 
     # ============================================================
-    # Monta resultado final
+    # MONTA RESULTADO FINAL
     # ============================================================
 
     resultado = [
@@ -354,11 +415,14 @@ def buscar_todos_proventos(ticker):
         for dados in consolidados.values()
     ]
 
-    # Ordena pela Data COM e depois pela Data de Pagamento
+    # ============================================================
+    # ORDENA POR DATA DE PAGAMENTO
+    # ============================================================
+
     resultado.sort(
         key=lambda x: (
-            x.get("dataCom") or "",
-            x.get("dataPagamento") or ""
+            x.get("dataPagamento") or "",
+            x.get("dataCom") or ""
         )
     )
 
@@ -379,7 +443,10 @@ def buscar_todos_proventos(ticker):
         f"{', '.join(fontes) or 'nenhuma'}"
     )
 
+    # ------------------------------------------------------------
     # Mostra os resultados finais para conferência
+    # ------------------------------------------------------------
+
     for item in resultado:
         print(
             f"[PROVENTO FINAL] "
