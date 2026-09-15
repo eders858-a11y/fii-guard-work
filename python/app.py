@@ -247,118 +247,74 @@ def buscar_proventos_yfinance(ticker):
 # ============================================================
 
 def buscar_todos_proventos(ticker):
-
     ticker = ticker.upper().strip()
 
-    # --------------------------------------------------------
-    # 1. BUSCA FUNDAMENTUS
-    # --------------------------------------------------------
+    fundamentus_divs = buscar_proventos_fundamentus(ticker)
+    yfinance_divs = buscar_proventos_yfinance(ticker)
 
-    fundamentus_divs = buscar_proventos_fundamentus(
-        ticker
-    )
+    todas_fontes = fundamentus_divs + yfinance_divs
 
-    # --------------------------------------------------------
-    # 2. BUSCA YFINANCE
-    #
-    # Agora também consultamos yfinance mesmo quando
-    # Fundamentus encontrou resultados, para permitir
-    # a comparação entre as fontes.
-    # --------------------------------------------------------
-
-    yfinance_divs = buscar_proventos_yfinance(
-        ticker
-    )
-
-    # --------------------------------------------------------
-    # 3. JUNTA TODAS AS FONTES
-    # --------------------------------------------------------
-
-    todas_fontes = (
-            fundamentus_divs +
-            yfinance_divs
-    )
-
+    # Consolida pelo ANO + MÊS.
+    # Fundamentus normalmente informa a data-com real.
+    # YFinance pode informar o primeiro dia do mês.
     consolidados = {}
 
     for item in todas_fontes:
-
-        ticker_item = item.get(
-            "ticker",
-            ticker
-        )
-
-        data_com = item.get(
-            "dataCom"
-        )
-
-        valor = item.get(
-            "valorUnitario"
-        )
+        ticker_item = item.get("ticker", ticker)
+        data_com = item.get("dataCom")
+        valor = item.get("valorUnitario")
 
         if not data_com or valor is None:
             continue
 
         try:
             valor = float(valor)
-
         except Exception:
             continue
 
-        chave = (
-            ticker_item,
-            data_com
-        )
+        # Data esperada: YYYY-MM-DD
+        partes = str(data_com).split("-")
 
-        # ----------------------------------------------------
-        # PRIMEIRO VALOR ENCONTRADO
-        # ----------------------------------------------------
+        if len(partes) >= 2:
+            chave_mes = f"{partes[0]}-{partes[1]}"
+        else:
+            chave_mes = str(data_com)
+
+        chave = (ticker_item, chave_mes)
 
         if chave not in consolidados:
-
             consolidados[chave] = item
-
             continue
 
-        # ----------------------------------------------------
-        # JÁ EXISTE OUTRA FONTE
-        #
-        # Fica com o MAIOR VALOR.
-        # ----------------------------------------------------
-
-        valor_existente = consolidados[chave].get(
-            "valorUnitario"
-        )
+        existente = consolidados[chave]
 
         try:
             valor_existente = float(
-                valor_existente
+                existente.get("valorUnitario", 0)
             )
-
         except Exception:
             valor_existente = 0
 
+        # REGRA PRINCIPAL:
+        # Se houver mais de uma fonte para o mesmo mês,
+        # fica sempre o MAIOR valor.
         if valor > valor_existente:
-
             print(
                 f"[MAIOR VALOR] {ticker_item} "
-                f"{data_com}: "
+                f"{chave_mes}: "
                 f"{valor_existente} -> {valor} "
                 f"({item.get('fonte', 'desconhecida')})"
             )
 
             consolidados[chave] = item
 
-    # --------------------------------------------------------
-    # 4. RESULTADO FINAL
-    # --------------------------------------------------------
-
-    resultado = list(
-        consolidados.values()
-    )
+    resultado = list(consolidados.values())
 
     resultado.sort(
-        key=lambda x: x.get("dataCom") or ""
+        key=lambda x: (
+            x.get("dataCom") or "",
+            x.get("dataPagamento") or ""
+        )
     )
 
     fontes = set(
@@ -375,8 +331,6 @@ def buscar_todos_proventos(ticker):
     )
 
     return resultado
-
-
 # ============================================================
 # API DE PROVENTOS - UM FII
 # ============================================================
