@@ -10,7 +10,7 @@ FUNDAMENTUS_URL = "https://www.fundamentus.com.br/fii_proventos.php"
 
 
 # ============================================================
-# FUNÇÕES AUXILIARES - FUNDAMENTUS
+# FUNÇÕES AUXILIARES
 # ============================================================
 
 def limpar_html(texto):
@@ -22,8 +22,14 @@ def limpar_html(texto):
 def converter_valor_brasileiro(valor):
     try:
         valor = valor.strip()
+
+        # Exemplo:
+        # 1.234,56 -> 1234.56
+        # 0,13     -> 0.13
         valor = valor.replace(".", "").replace(",", ".")
+
         return float(valor)
+
     except Exception:
         return None
 
@@ -31,29 +37,24 @@ def converter_valor_brasileiro(valor):
 def converter_data_brasileira(data):
     try:
         partes = data.strip().split("/")
+
         if len(partes) != 3:
             return None
 
         dia, mes, ano = partes
+
         return f"{ano}-{mes}-{dia}"
 
     except Exception:
         return None
 
 
+# ============================================================
+# FUNDAMENTUS
+# FONTE PRINCIPAL DOS PROVENTOS
+# ============================================================
+
 def buscar_proventos_fundamentus(ticker):
-    """
-    Busca os proventos do FII no Fundamentus.
-
-    Retorna:
-        ticker
-        dataCom
-        dataPagamento
-        valorUnitario
-        tipo
-        fonte
-    """
-
     resultados = []
 
     try:
@@ -92,7 +93,6 @@ def buscar_proventos_fundamentus(ticker):
 
         pagina = resposta.text
 
-        # Procura todas as linhas da tabela.
         linhas = re.findall(
             r"<tr[^>]*>(.*?)</tr>",
             pagina,
@@ -114,6 +114,15 @@ def buscar_proventos_fundamentus(ticker):
                 limpar_html(coluna)
                 for coluna in colunas
             ]
+
+            # ------------------------------------------------
+            # COLUNAS DO FUNDAMENTUS
+            #
+            # 0 = Data COM
+            # 1 = Tipo
+            # 2 = Data Pagamento
+            # 3 = Valor
+            # ------------------------------------------------
 
             data_com = converter_data_brasileira(
                 valores[0]
@@ -158,6 +167,7 @@ def buscar_proventos_fundamentus(ticker):
 
 # ============================================================
 # YFINANCE
+# FONTE DE RESERVA / FALLBACK
 # ============================================================
 
 def buscar_proventos_yfinance(ticker):
@@ -171,14 +181,14 @@ def buscar_proventos_yfinance(ticker):
         )
 
         ativo = yf.Ticker(simbolo)
+
         divs = ativo.dividends
 
         if not divs.empty:
+
             for data, valor in divs.items():
 
-                data_str = data.strftime(
-                    "%Y-%m-%d"
-                )
+                data_str = data.strftime("%Y-%m-%d")
 
                 resultados.append({
                     "ticker": ticker,
@@ -189,7 +199,13 @@ def buscar_proventos_yfinance(ticker):
                     "fonte": "yfinance"
                 })
 
+        print(
+            f"[YFINANCE] {ticker}: "
+            f"{len(resultados)} proventos encontrados"
+        )
+
     except Exception as e:
+
         print(
             f"[YFINANCE] FALHA {ticker}: {e}"
         )
@@ -198,38 +214,81 @@ def buscar_proventos_yfinance(ticker):
 
 
 # ============================================================
-# CONSOLIDAÇÃO DAS DUAS FONTES
+# CONSOLIDAÇÃO
+#
+# FUNDAMENTUS É SEMPRE PRIORIDADE.
+#
+# Se Fundamentus encontrou qualquer provento:
+#   usa somente Fundamentus.
+#
+# Se Fundamentus não encontrou nada:
+#   usa yfinance.
+#
+# Isso evita duplicidade causada pelas datas diferentes
+# apresentadas pelo yfinance.
 # ============================================================
 
 def buscar_todos_proventos(ticker):
 
     ticker = ticker.upper().strip()
 
-    yfinance_divs = buscar_proventos_yfinance(
-        ticker
-    )
+    # --------------------------------------------------------
+    # 1. PRIMEIRO: FUNDAMENTUS
+    # --------------------------------------------------------
 
     fundamentus_divs = buscar_proventos_fundamentus(
         ticker
     )
 
-    # Chave principal:
-    # ticker + data-com
-    #
-    # Fundamentus tem prioridade porque fornece
-    # data-com e data de pagamento separadamente.
+    if fundamentus_divs:
+
+        # Segurança contra duplicidades dentro
+        # da própria resposta do Fundamentus.
+        consolidados = {}
+
+        for item in fundamentus_divs:
+
+            chave = (
+                item["ticker"],
+                item["dataCom"]
+            )
+
+            consolidados[chave] = item
+
+        resultado = list(
+            consolidados.values()
+        )
+
+        resultado.sort(
+            key=lambda x: x.get("dataCom") or ""
+        )
+
+        print(
+            f"[CONSOLIDADO] {ticker}: "
+            f"{len(resultado)} proventos "
+            f"usando FUNDAMENTUS"
+        )
+
+        return resultado
+
+    # --------------------------------------------------------
+    # 2. SE FUNDAMENTUS NÃO ENCONTROU NADA:
+    #    USA YFINANCE
+    # --------------------------------------------------------
+
+    print(
+        f"[CONSOLIDADO] {ticker}: "
+        f"Fundamentus não encontrou proventos. "
+        f"Usando yfinance como fallback."
+    )
+
+    yfinance_divs = buscar_proventos_yfinance(
+        ticker
+    )
+
     consolidados = {}
 
     for item in yfinance_divs:
-
-        chave = (
-            item["ticker"],
-            item["dataCom"]
-        )
-
-        consolidados[chave] = item
-
-    for item in fundamentus_divs:
 
         chave = (
             item["ticker"],
@@ -243,27 +302,23 @@ def buscar_todos_proventos(ticker):
     )
 
     resultado.sort(
-        key=lambda x: (
-                x.get("dataCom") or ""
-        )
+        key=lambda x: x.get("dataCom") or ""
     )
 
     print(
         f"[CONSOLIDADO] {ticker}: "
-        f"{len(resultado)} proventos"
+        f"{len(resultado)} proventos "
+        f"usando YFINANCE"
     )
 
     return resultado
 
 
 # ============================================================
-# API - PROVENTOS INDIVIDUAL
+# API DE PROVENTOS - UM FII
 # ============================================================
 
-@app.route(
-    "/api/proventos",
-    methods=["GET"]
-)
+@app.route("/api/proventos", methods=["GET"])
 def get_proventos():
 
     ticker = request.args.get(
@@ -272,6 +327,7 @@ def get_proventos():
     ).upper().strip()
 
     if not ticker:
+
         return jsonify({
             "error": "Ticker nao informado"
         }), 400
@@ -289,19 +345,20 @@ def get_proventos():
 
     except Exception as e:
 
+        print(
+            f"[API PROVENTOS] FALHA {ticker}: {e}"
+        )
+
         return jsonify({
             "error": str(e)
         }), 500
 
 
 # ============================================================
-# API - PROVENTOS EM LOTE
+# API DE PROVENTOS - VÁRIOS FIIs
 # ============================================================
 
-@app.route(
-    "/api/proventos-lote",
-    methods=["GET"]
-)
+@app.route("/api/proventos-lote", methods=["GET"])
 def get_proventos_lote():
 
     tickers_param = request.args.get(
@@ -310,6 +367,7 @@ def get_proventos_lote():
     ).upper().strip()
 
     if not tickers_param:
+
         return jsonify({
             "error": "Nenhum ticker informado"
         }), 400
@@ -349,7 +407,10 @@ def get_proventos_lote():
 
 
 # ============================================================
-# API - COTAÇÃO ATUAL DO FII
+# COTAÇÃO
+#
+# ESTA PARTE CONTINUA COM YFINANCE.
+# NÃO FOI ALTERADA NA LÓGICA.
 # ============================================================
 
 @app.route(
@@ -372,21 +433,39 @@ def get_cotacao(ticker):
 
         preco = None
 
+        # ----------------------------------------------------
+        # PRIMEIRA TENTATIVA
+        # ----------------------------------------------------
+
         try:
+
             preco = ativo.fast_info.get(
                 "lastPrice"
             )
+
         except Exception:
+
             pass
+
+        # ----------------------------------------------------
+        # SEGUNDA TENTATIVA
+        # ----------------------------------------------------
 
         if preco is None:
 
             try:
+
                 preco = ativo.info.get(
                     "regularMarketPrice"
                 )
+
             except Exception:
+
                 pass
+
+        # ----------------------------------------------------
+        # NÃO ENCONTROU
+        # ----------------------------------------------------
 
         if preco is None:
 
@@ -396,6 +475,10 @@ def get_cotacao(ticker):
                 "status": "ERRO",
                 "message": "Cotacao nao encontrada"
             }), 404
+
+        # ----------------------------------------------------
+        # RETORNA COTAÇÃO
+        # ----------------------------------------------------
 
         return jsonify({
             "ticker": ticker,
@@ -414,7 +497,7 @@ def get_cotacao(ticker):
 
 
 # ============================================================
-# HOME
+# PÁGINA INICIAL
 # ============================================================
 
 @app.route("/")
@@ -422,7 +505,9 @@ def home():
 
     return (
         "<h1>Servidor FII Guard Ativo</h1>"
-        "<p>Fontes: yfinance + Fundamentus</p>"
+        "<p>Proventos: Fundamentus primeiro + "
+        "yfinance como fallback</p>"
+        "<p>Cotacoes: yfinance</p>"
     )
 
 
