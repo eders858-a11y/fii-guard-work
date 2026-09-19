@@ -993,31 +993,36 @@ def api_fnet_provento():
             })
 
         # ----------------------------------------------------
-        # 4 - ABRE O PRIMEIRO DOCUMENTO
-        #
-        # Ainda NÃO estamos filtrando provento.
-        # Primeiro queremos enxergar exatamente o que o FNET
-        # está entregando.
+                # ----------------------------------------------------
+        # 4 - PROCURA O DOCUMENTO DE PROVENTOS
         # ----------------------------------------------------
 
-        primeiro_documento = None
+        documento_alvo = None
 
-        if lista_documentos:
+        for item in lista_documentos:
 
-            primeiro_documento = (
-                lista_documentos[0]
-            )
+            if (
+                "Rendimentos e Amortizações"
+                in str(item.get("tipoDocumento", ""))
+                and item.get("situacaoDocumento") == "A"
+            ):
+                documento_alvo = item
+                break
 
-            documento_id = primeiro_documento["id"]
+        if not documento_alvo:
 
-            documento = fnet_extrair_documento(
-                sessao,
-                documento_id
-            )
+            return jsonify({
+                "status": "ERRO",
+                "ticker": ticker,
+                "cnpj": cnpj,
+                "etapa": "documento_provento",
+                "erro": "Documento de Rendimentos e Amortizações não encontrado"
+            }), 404
 
-        else:
-
-            documento = None
+        documento = fnet_extrair_documento(
+            sessao,
+            documento_alvo["id"]
+        )
 
         # ----------------------------------------------------
         # RESULTADO DO TESTE
@@ -1027,15 +1032,8 @@ def api_fnet_provento():
             "status": "OK",
             "ticker": ticker,
             "cnpj": cnpj,
-            "cnpjNormalizado": cnpj_normalizado,
-            "recordsTotal": dados.get(
-                "recordsTotal", 0
-            ),
-            "quantidadeDocumentos": len(
-                lista_documentos
-            ),
-            "documentos": lista_documentos,
-            "primeiroDocumento": documento
+            "documento": documento_alvo,
+            "conteudo": documento
         })
 
     except Exception as e:
