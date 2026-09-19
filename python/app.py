@@ -804,7 +804,73 @@ def fnet_extrair_documento(sessao, documento_id):
         "html_tamanho": len(resposta.text),
         "texto": texto
     }
+def fnet_extrair_dados_provento(texto, documento_id):
 
+    resultado = {
+        "documentoId": documento_id,
+        "dataBase": None,
+        "valorProvento": None,
+        "dataPagamento": None,
+        "periodo": None,
+        "isentoIR": None
+    }
+
+    texto_limpo = re.sub(
+        r"\s+",
+        " ",
+        texto
+    )
+
+    match = re.search(
+        r"Data-base.*?(\d{2}/\d{2}/\d{4})",
+        texto_limpo,
+        re.IGNORECASE
+    )
+
+    if match:
+        resultado["dataBase"] = match.group(1)
+
+    match = re.search(
+        r"Valor do provento.*?(\d+,\d+)",
+        texto_limpo,
+        re.IGNORECASE
+    )
+
+    if match:
+        resultado["valorProvento"] = converter_valor_brasileiro(
+            match.group(1)
+        )
+
+    match = re.search(
+        r"Data do pagamento.*?(\d{2}/\d{2}/\d{4})",
+        texto_limpo,
+        re.IGNORECASE
+    )
+
+    if match:
+        resultado["dataPagamento"] = match.group(1)
+
+    match = re.search(
+        r"Período de referência\s*([A-Za-zÀ-ÿ]+)",
+        texto_limpo,
+        re.IGNORECASE
+    )
+
+    if match:
+        resultado["periodo"] = match.group(1)
+
+    match = re.search(
+        r"Rendimento isento de IR\*?\s*(Sim|Não)",
+        texto_limpo,
+        re.IGNORECASE
+    )
+
+    if match:
+        resultado["isentoIR"] = (
+            match.group(1).lower() == "sim"
+        )
+
+    return resultado
 
 @app.route("/api/fnet/provento", methods=["GET"])
 def api_fnet_provento():
@@ -1028,13 +1094,17 @@ def api_fnet_provento():
         # RESULTADO DO TESTE
         # ----------------------------------------------------
 
-        return jsonify({
-            "status": "OK",
-            "ticker": ticker,
-            "cnpj": cnpj,
-            "documento": documento_alvo,
-            "conteudo": documento
-        })
+       dados_provento = fnet_extrair_dados_provento(
+    documento["texto"],
+    documento_alvo["id"]
+)
+
+return jsonify({
+    "status": "OK",
+    "ticker": ticker,
+    "cnpj": cnpj,
+    "provento": dados_provento
+})
 
     except Exception as e:
 
