@@ -1093,18 +1093,17 @@ def api_fnet_provento():
         # ----------------------------------------------------
         # RESULTADO DO TESTE
         # ----------------------------------------------------
+        dados_provento = fnet_extrair_dados_provento(
+            documento["texto"],
+            documento_alvo["id"]
+        )
 
-       dados_provento = fnet_extrair_dados_provento(
-    documento["texto"],
-    documento_alvo["id"]
-)
-
-return jsonify({
-    "status": "OK",
-    "ticker": ticker,
-    "cnpj": cnpj,
-    "provento": dados_provento
-})
+        return jsonify({
+            "status": "OK",
+            "ticker": ticker,
+            "cnpj": cnpj,
+            "provento": dados_provento
+        })
 
     except Exception as e:
 
