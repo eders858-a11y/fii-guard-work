@@ -3,6 +3,8 @@ import yfinance as yf
 import requests
 import re
 import html
+import base64
+import json
 
 app = Flask(__name__)
 
@@ -55,8 +57,179 @@ def converter_data_brasileira(data):
 
 
 # ============================================================
+# B3
+# FONTE PRINCIPAL DOS PROVENTOS
+# ============================================================
+
+def buscar_proventos_b3(ticker):
+    resultados = []
+
+    try:
+        ticker = ticker.upper().strip()
+
+        # Ex.:
+        # TRXF11 -> TRXF
+        # BODB11 -> BODB
+        codigo = re.sub(r"\d+$", "", ticker)
+
+        payload = {
+            "language": "pt-br",
+            "idCEM": codigo
+        }
+
+        payload_json = json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":")
+        )
+
+        payload_b64 = base64.b64encode(
+            payload_json.encode("utf-8")
+        ).decode("ascii")
+
+        url = (
+            "https://sistemaswebb3-listados.b3.com.br/"
+            "fundsListedProxy/Search/GetEventsCorporateActions/"
+            f"{payload_b64}"
+        )
+
+        headers = {
+            "Accept": "application/json",
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 "
+                "(KHTML, like Gecko) "
+                "Chrome/140.0 Safari/537.36"
+            ),
+            "Referer": (
+                "https://sistemaswebb3-listados.b3.com.br/"
+            )
+        }
+
+        resposta = requests.get(
+            url,
+            headers=headers,
+            timeout=20
+        )
+
+        print(
+            f"[B3] {ticker} "
+            f"HTTP {resposta.status_code}"
+        )
+
+        if resposta.status_code != 200:
+            return resultados
+
+        try:
+            dados = resposta.json()
+        except Exception as e:
+            print(
+                f"[B3] {ticker}: "
+                f"resposta nao e JSON: {e}"
+            )
+            return resultados
+
+        cash_dividends = dados.get(
+            "cashDividends",
+            []
+        )
+
+        if not isinstance(cash_dividends, list):
+            return resultados
+
+        # --------------------------------------------------------
+        # Todos os eventos de RENDIMENTO são preservados aqui.
+        #
+        # A consolidação abaixo continua responsável por:
+        # - eliminar duplicidades
+        # - comparar fontes
+        # - escolher o maior valor numérico
+        #
+        # Não arredonda os valores.
+        # --------------------------------------------------------
+
+        for item in cash_dividends:
+
+            label = str(
+                item.get("label", "")
+            ).strip().upper()
+
+            if label != "RENDIMENTO":
+                continue
+
+            # Para evento de rendimento, a data correta para
+            # representar a data-com é lastDatePrior.
+            #
+            # approvedOn fica como reserva caso lastDatePrior
+            # não exista.
+            data_com = (
+                    item.get("lastDatePrior")
+                    or item.get("approvedOn")
+            )
+
+            data_pagamento = item.get(
+                "paymentDate"
+            )
+
+            valor = converter_valor_brasileiro(
+                item.get("rate")
+            )
+
+            data_com = (
+                converter_data_brasileira(data_com)
+                if data_com
+                else None
+            )
+
+            data_pagamento = (
+                converter_data_brasileira(data_pagamento)
+                if data_pagamento
+                else None
+            )
+
+            if (
+                    not data_com
+                    or not data_pagamento
+                    or valor is None
+            ):
+                continue
+
+            if valor <= 0:
+                continue
+
+            resultados.append({
+                "ticker": ticker,
+                "dataCom": data_com,
+                "dataPagamento": data_pagamento,
+                "valorUnitario": float(valor),
+                "tipo": "Rendimento",
+                "fonte": "B3"
+            })
+
+        resultados.sort(
+            key=lambda x: (
+                x.get("dataPagamento") or "",
+                x.get("dataCom") or ""
+            )
+        )
+
+        print(
+            f"[B3] {ticker}: "
+            f"{len(resultados)} proventos encontrados"
+        )
+
+    except Exception as e:
+
+        print(
+            f"[B3] FALHA {ticker}: {e}"
+        )
+
+    return resultados
+
+
+# ============================================================
 # FUNDAMENTUS
-# FONTE DOS PROVENTOS
+# FONTE DE RESERVA / COMPARAÇÃO
 # ============================================================
 
 def buscar_proventos_fundamentus(ticker):
@@ -235,14 +408,18 @@ def buscar_proventos_yfinance(ticker):
 #
 # TODAS AS FONTES SÃO CONSULTADAS.
 #
+# B3 = FONTE PRINCIPAL
+# Fundamentus = RESERVA / COMPARAÇÃO
+# yfinance = RESERVA / COMPARAÇÃO
+#
 # Para o mesmo ticker + data COM:
 #
-# Fundamentus = 0,080
-# Outra fonte = 0,083
+# B3          = 0,080
+# Fundamentus = 0,083
 #
 # Resultado = 0,083
 #
-# A regra é pelo MAIOR VALOR NUMÉRICO,
+# A regra continua sendo pelo MAIOR VALOR NUMÉRICO,
 # e não pela quantidade de casas decimais.
 # ============================================================
 
@@ -250,13 +427,18 @@ def buscar_todos_proventos(ticker):
     ticker = ticker.upper().strip()
 
     # ============================================================
-    # BUSCA NAS DUAS FONTES
+    # BUSCA NAS TRÊS FONTES
     # ============================================================
 
+    b3_divs = buscar_proventos_b3(ticker)
     fundamentus_divs = buscar_proventos_fundamentus(ticker)
     yfinance_divs = buscar_proventos_yfinance(ticker)
 
-    todas_fontes = fundamentus_divs + yfinance_divs
+    todas_fontes = (
+            b3_divs
+            + fundamentus_divs
+            + yfinance_divs
+    )
 
     # ============================================================
     # CONSOLIDAÇÃO
@@ -270,37 +452,44 @@ def buscar_todos_proventos(ticker):
     #
     # 3. O MAIOR valor numérico encontrado é utilizado.
     #
-    # 4. Se existir Fundamentus, suas datas são preservadas.
+    # 4. B3 tem prioridade para as DATAS.
     #
-    # Isso evita, por exemplo:
+    # 5. Se não existir B3, Fundamentus é utilizado para as datas.
     #
-    # Fundamentus:
-    # 31/08/2026 -> pagamento 08/09/2026 -> R$ 0,083
+    # 6. yfinance fica como fonte de comparação/reserva.
     #
-    # yfinance:
-    # 01/09/2026 -> pagamento 01/09/2026 -> R$ 0,083
-    #
-    # Os dois pertencem a SETEMBRO/2026 e representam
-    # o mesmo provento.
+    # Não há arredondamento dos valores.
     # ============================================================
 
     consolidados = {}
 
     for item in todas_fontes:
+
         ticker_item = str(
             item.get("ticker", ticker)
         ).upper().strip()
 
         data_com = item.get("dataCom")
         data_pagamento = item.get("dataPagamento")
-        valor = item.get("valorUnitario")
+
+        valor = item.get(
+            "valorUnitario"
+        )
+
         tipo = str(
             item.get("tipo", "Rendimento")
         ).strip()
 
-        fonte = item.get("fonte", "desconhecida")
+        fonte = item.get(
+            "fonte",
+            "desconhecida"
+        )
 
-        if not data_com or not data_pagamento or valor is None:
+        if (
+                not data_com
+                or not data_pagamento
+                or valor is None
+        ):
             continue
 
         # --------------------------------------------------------
@@ -310,6 +499,7 @@ def buscar_todos_proventos(ticker):
 
         try:
             valor = float(valor)
+
         except Exception:
             continue
 
@@ -320,17 +510,26 @@ def buscar_todos_proventos(ticker):
         # Normaliza data de pagamento
         # --------------------------------------------------------
 
-        data_pagamento_str = str(data_pagamento)
+        data_pagamento_str = str(
+            data_pagamento
+        )
 
-        partes_pagamento = data_pagamento_str.split("-")
+        partes_pagamento = (
+            data_pagamento_str.split("-")
+        )
 
         if len(partes_pagamento) >= 2:
+
             ano_mes_pagamento = (
                 f"{partes_pagamento[0]}-"
                 f"{partes_pagamento[1]}"
             )
+
         else:
-            ano_mes_pagamento = data_pagamento_str
+
+            ano_mes_pagamento = (
+                data_pagamento_str
+            )
 
         # --------------------------------------------------------
         # Normaliza tipo
@@ -339,14 +538,20 @@ def buscar_todos_proventos(ticker):
         tipo_normalizado = tipo.upper()
 
         if "AMORT" in tipo_normalizado:
+
             tipo_chave = "AMORTIZATION"
+
         else:
+
             tipo_chave = "INCOME"
 
         # --------------------------------------------------------
         # CHAVE FINAL
         #
         # Ticker + mês do pagamento + tipo
+        #
+        # Mantida a mesma lógica existente para evitar
+        # duplicação.
         # --------------------------------------------------------
 
         chave = (
@@ -360,10 +565,14 @@ def buscar_todos_proventos(ticker):
         # --------------------------------------------------------
 
         if chave not in consolidados:
+
             consolidados[chave] = {
                 "registro": item.copy(),
                 "maiorValor": valor,
-                "temFundamentus": fonte == "Fundamentus"
+                "temB3": fonte == "B3",
+                "temFundamentus": (
+                        fonte == "Fundamentus"
+                )
             }
 
             continue
@@ -372,9 +581,12 @@ def buscar_todos_proventos(ticker):
 
         # --------------------------------------------------------
         # Se encontrou valor maior, utiliza o maior valor.
+        #
+        # Mantém a regra anterior sem arredondar.
         # --------------------------------------------------------
 
         if valor > atual["maiorValor"]:
+
             print(
                 f"[MAIOR VALOR] {ticker_item} "
                 f"{ano_mes_pagamento}: "
@@ -385,16 +597,33 @@ def buscar_todos_proventos(ticker):
             atual["maiorValor"] = valor
 
         # --------------------------------------------------------
-        # Fundamentus tem prioridade para as DATAS.
+        # B3 tem prioridade para as DATAS.
         #
-        # Se o primeiro registro foi yfinance e depois encontramos
-        # Fundamentus, substituímos o registro pelas datas do
-        # Fundamentus.
+        # Se o primeiro registro foi Fundamentus ou yfinance
+        # e depois encontramos B3, substituímos o registro
+        # pelas datas da B3.
         # --------------------------------------------------------
 
-        if fonte == "Fundamentus":
+        if fonte == "B3":
 
-            if not atual["temFundamentus"]:
+            if not atual["temB3"]:
+
+                atual["registro"] = item.copy()
+                atual["temB3"] = True
+
+        # --------------------------------------------------------
+        # Fundamentus só tem prioridade caso B3 ainda não exista.
+        #
+        # Se já houver B3, as datas B3 permanecem.
+        # --------------------------------------------------------
+
+        elif fonte == "Fundamentus":
+
+            if (
+                    not atual["temB3"]
+                    and not atual["temFundamentus"]
+            ):
+
                 atual["registro"] = item.copy()
                 atual["temFundamentus"] = True
 
@@ -438,7 +667,7 @@ def buscar_todos_proventos(ticker):
     print(
         f"[CONSOLIDADO] {ticker}: "
         f"{len(resultado)} proventos "
-        f"comparando FUNDAMENTUS + YFINANCE "
+        f"comparando B3 + FUNDAMENTUS + YFINANCE "
         f"| fontes finais: "
         f"{', '.join(fontes) or 'nenhuma'}"
     )
@@ -448,6 +677,7 @@ def buscar_todos_proventos(ticker):
     # ------------------------------------------------------------
 
     for item in resultado:
+
         print(
             f"[PROVENTO FINAL] "
             f"{item.get('ticker')} | "
@@ -458,6 +688,8 @@ def buscar_todos_proventos(ticker):
         )
 
     return resultado
+
+
 # ============================================================
 # TESTE FNET - CONSULTA DIRETA
 #
@@ -677,7 +909,9 @@ def fnet_buscar_documentos(ticker, quantidade=10):
 
     try:
         json_fnet = resposta.json()
+
     except Exception as e:
+
         return {
             "ticker": ticker,
             "cnpj": cnpj,
@@ -687,7 +921,10 @@ def fnet_buscar_documentos(ticker, quantidade=10):
             "resposta_inicio": resposta.text[:1000]
         }
 
-    documentos = json_fnet.get("data", [])
+    documentos = json_fnet.get(
+        "data",
+        []
+    )
 
     if not isinstance(documentos, list):
         documentos = []
@@ -699,7 +936,9 @@ def fnet_buscar_documentos(ticker, quantidade=10):
         if not item.get("id"):
             continue
 
-        documento_id = int(item["id"])
+        documento_id = int(
+            item["id"]
+        )
 
         link = (
             "https://fnet.bmfbovespa.com.br/fnet/publico/"
@@ -709,28 +948,36 @@ def fnet_buscar_documentos(ticker, quantidade=10):
         resultado.append({
             "id": documento_id,
             "dataReferencia": item.get(
-                "dataReferencia", ""
+                "dataReferencia",
+                ""
             ),
             "dataEntrega": item.get(
-                "dataEntrega", ""
+                "dataEntrega",
+                ""
             ),
             "categoriaDocumento": item.get(
-                "categoriaDocumento", ""
+                "categoriaDocumento",
+                ""
             ),
             "tipoDocumento": item.get(
-                "tipoDocumento", ""
+                "tipoDocumento",
+                ""
             ),
             "descricaoFundo": item.get(
-                "descricaoFundo", ""
+                "descricaoFundo",
+                ""
             ),
             "nomePregao": item.get(
-                "nomePregao", ""
+                "nomePregao",
+                ""
             ),
             "status": item.get(
-                "status", ""
+                "status",
+                ""
             ),
             "situacaoDocumento": item.get(
-                "situacaoDocumento", ""
+                "situacaoDocumento",
+                ""
             ),
             "linkDocumento": link
         })
@@ -745,7 +992,8 @@ def fnet_buscar_documentos(ticker, quantidade=10):
         "cnpj": cnpj,
         "cnpjNormalizado": cnpj_normalizado,
         "recordsTotal": json_fnet.get(
-            "recordsTotal", 0
+            "recordsTotal",
+            0
         ),
         "documentos": resultado
     }
@@ -788,6 +1036,7 @@ def fnet_extrair_documento(sessao, documento_id):
     )
 
     if not resposta.ok:
+
         return {
             "id": documento_id,
             "url": url,
@@ -795,7 +1044,9 @@ def fnet_extrair_documento(sessao, documento_id):
             "erro": "Falha ao abrir documento"
         }
 
-    texto = limpar_html(resposta.text)
+    texto = limpar_html(
+        resposta.text
+    )
 
     return {
         "id": documento_id,
@@ -804,7 +1055,12 @@ def fnet_extrair_documento(sessao, documento_id):
         "html_tamanho": len(resposta.text),
         "texto": texto
     }
-def fnet_extrair_dados_provento(texto, documento_id):
+
+
+def fnet_extrair_dados_provento(
+        texto,
+        documento_id
+):
 
     resultado = {
         "documentoId": documento_id,
@@ -837,8 +1093,11 @@ def fnet_extrair_dados_provento(texto, documento_id):
     )
 
     if match:
-        resultado["valorProvento"] = converter_valor_brasileiro(
-            match.group(1)
+
+        resultado["valorProvento"] = (
+            converter_valor_brasileiro(
+                match.group(1)
+            )
         )
 
     match = re.search(
@@ -866,13 +1125,22 @@ def fnet_extrair_dados_provento(texto, documento_id):
     )
 
     if match:
+
         resultado["isentoIR"] = (
-            match.group(1).lower() == "sim"
+                match.group(1).lower() == "sim"
         )
 
     return resultado
 
-@app.route("/api/fnet/provento", methods=["GET"])
+
+# ============================================================
+# API FNET
+# ============================================================
+
+@app.route(
+    "/api/fnet/provento",
+    methods=["GET"]
+)
 def api_fnet_provento():
 
     ticker = request.args.get(
@@ -881,6 +1149,7 @@ def api_fnet_provento():
     ).upper().strip()
 
     if not ticker:
+
         return jsonify({
             "status": "ERRO",
             "error": "Ticker nao informado"
@@ -890,16 +1159,21 @@ def api_fnet_provento():
 
         ticker = ticker.upper().strip()
 
-        cnpj = fnet_obter_cnpj(ticker)
+        cnpj = fnet_obter_cnpj(
+            ticker
+        )
 
         if not cnpj:
+
             return jsonify({
                 "status": "ERRO",
                 "ticker": ticker,
                 "error": "CNPJ nao encontrado"
             }), 404
 
-        cnpj_normalizado = fnet_normalizar_cnpj(cnpj)
+        cnpj_normalizado = (
+            fnet_normalizar_cnpj(cnpj)
+        )
 
         # ----------------------------------------------------
         # SESSION
@@ -938,10 +1212,12 @@ def api_fnet_provento():
 
         print(
             f"[FNET API] {ticker}: "
-            f"gerenciador HTTP {pagina.status_code}"
+            f"gerenciador HTTP "
+            f"{pagina.status_code}"
         )
 
         if not pagina.ok:
+
             return jsonify({
                 "status": "ERRO",
                 "ticker": ticker,
@@ -982,10 +1258,12 @@ def api_fnet_provento():
 
         print(
             f"[FNET API] {ticker}: "
-            f"documentos HTTP {resposta.status_code}"
+            f"documentos HTTP "
+            f"{resposta.status_code}"
         )
 
         if not resposta.ok:
+
             return jsonify({
                 "status": "ERRO",
                 "ticker": ticker,
@@ -995,8 +1273,11 @@ def api_fnet_provento():
             }), 502
 
         try:
+
             dados = resposta.json()
+
         except Exception:
+
             return jsonify({
                 "status": "ERRO",
                 "ticker": ticker,
@@ -1006,9 +1287,15 @@ def api_fnet_provento():
                 "resposta": resposta.text[:2000]
             }), 502
 
-        documentos = dados.get("data", [])
+        documentos = dados.get(
+            "data",
+            []
+        )
 
-        if not isinstance(documentos, list):
+        if not isinstance(
+                documentos,
+                list
+        ):
             documentos = []
 
         # ----------------------------------------------------
@@ -1022,7 +1309,9 @@ def api_fnet_provento():
             if not item.get("id"):
                 continue
 
-            documento_id = int(item["id"])
+            documento_id = int(
+                item["id"]
+            )
 
             link = (
                 "https://fnet.bmfbovespa.com.br/fnet/publico/"
@@ -1032,34 +1321,41 @@ def api_fnet_provento():
             lista_documentos.append({
                 "id": documento_id,
                 "dataReferencia": item.get(
-                    "dataReferencia", ""
+                    "dataReferencia",
+                    ""
                 ),
                 "dataEntrega": item.get(
-                    "dataEntrega", ""
+                    "dataEntrega",
+                    ""
                 ),
                 "categoriaDocumento": item.get(
-                    "categoriaDocumento", ""
+                    "categoriaDocumento",
+                    ""
                 ),
                 "tipoDocumento": item.get(
-                    "tipoDocumento", ""
+                    "tipoDocumento",
+                    ""
                 ),
                 "descricaoFundo": item.get(
-                    "descricaoFundo", ""
+                    "descricaoFundo",
+                    ""
                 ),
                 "nomePregao": item.get(
-                    "nomePregao", ""
+                    "nomePregao",
+                    ""
                 ),
                 "status": item.get(
-                    "status", ""
+                    "status",
+                    ""
                 ),
                 "situacaoDocumento": item.get(
-                    "situacaoDocumento", ""
+                    "situacaoDocumento",
+                    ""
                 ),
                 "linkDocumento": link
             })
 
         # ----------------------------------------------------
-                # ----------------------------------------------------
         # 4 - PROCURA O DOCUMENTO DE PROVENTOS
         # ----------------------------------------------------
 
@@ -1068,10 +1364,18 @@ def api_fnet_provento():
         for item in lista_documentos:
 
             if (
-                "Rendimentos e Amortizações"
-                in str(item.get("tipoDocumento", ""))
-                and item.get("situacaoDocumento") == "A"
+                    "Rendimentos e Amortizações"
+                    in str(
+                item.get(
+                    "tipoDocumento",
+                    ""
+                )
+            )
+                    and item.get(
+                "situacaoDocumento"
+            ) == "A"
             ):
+
                 documento_alvo = item
                 break
 
@@ -1082,7 +1386,10 @@ def api_fnet_provento():
                 "ticker": ticker,
                 "cnpj": cnpj,
                 "etapa": "documento_provento",
-                "erro": "Documento de Rendimentos e Amortizações não encontrado"
+                "erro": (
+                    "Documento de Rendimentos e "
+                    "Amortizações não encontrado"
+                )
             }), 404
 
         documento = fnet_extrair_documento(
@@ -1093,9 +1400,12 @@ def api_fnet_provento():
         # ----------------------------------------------------
         # RESULTADO DO TESTE
         # ----------------------------------------------------
-        dados_provento = fnet_extrair_dados_provento(
-            documento["texto"],
-            documento_alvo["id"]
+
+        dados_provento = (
+            fnet_extrair_dados_provento(
+                documento["texto"],
+                documento_alvo["id"]
+            )
         )
 
         return jsonify({
@@ -1108,7 +1418,8 @@ def api_fnet_provento():
     except Exception as e:
 
         print(
-            f"[FNET API] FALHA {ticker}: {e}"
+            f"[FNET API] FALHA "
+            f"{ticker}: {e}"
         )
 
         return jsonify({
@@ -1116,11 +1427,16 @@ def api_fnet_provento():
             "ticker": ticker,
             "error": str(e)
         }), 500
+
+
 # ============================================================
 # API DE PROVENTOS - UM FII
 # ============================================================
 
-@app.route("/api/proventos", methods=["GET"])
+@app.route(
+    "/api/proventos",
+    methods=["GET"]
+)
 def get_proventos():
 
     ticker = request.args.get(
@@ -1136,8 +1452,10 @@ def get_proventos():
 
     try:
 
-        lista_divs = buscar_todos_proventos(
-            ticker
+        lista_divs = (
+            buscar_todos_proventos(
+                ticker
+            )
         )
 
         return jsonify({
@@ -1148,7 +1466,8 @@ def get_proventos():
     except Exception as e:
 
         print(
-            f"[API PROVENTOS] FALHA {ticker}: {e}"
+            f"[API PROVENTOS] FALHA "
+            f"{ticker}: {e}"
         )
 
         return jsonify({
@@ -1160,7 +1479,10 @@ def get_proventos():
 # API DE PROVENTOS - VÁRIOS FIIs
 # ============================================================
 
-@app.route("/api/proventos-lote", methods=["GET"])
+@app.route(
+    "/api/proventos-lote",
+    methods=["GET"]
+)
 def get_proventos_lote():
 
     tickers_param = request.args.get(
@@ -1186,8 +1508,10 @@ def get_proventos_lote():
 
         try:
 
-            proventos = buscar_todos_proventos(
-                ticker
+            proventos = (
+                buscar_todos_proventos(
+                    ticker
+                )
             )
 
             resultado_geral.extend(
@@ -1197,7 +1521,8 @@ def get_proventos_lote():
         except Exception as e:
 
             print(
-                f"[LOTE] FALHA {ticker}: {e}"
+                f"[LOTE] FALHA "
+                f"{ticker}: {e}"
             )
 
             continue
@@ -1230,7 +1555,9 @@ def get_cotacao(ticker):
             else f"{ticker}.SA"
         )
 
-        ativo = yf.Ticker(simbolo)
+        ativo = yf.Ticker(
+            simbolo
+        )
 
         preco = None
 
@@ -1306,7 +1633,7 @@ def home():
 
     return (
         "<h1>Servidor FII Guard Ativo</h1>"
-        "<p>Proventos: Fundamentus + yfinance "
+        "<p>Proventos: B3 + Fundamentus + yfinance "
         "comparando pelo maior valor</p>"
         "<p>Cotacoes: yfinance</p>"
     )
