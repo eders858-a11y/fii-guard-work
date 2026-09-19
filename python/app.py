@@ -959,7 +959,7 @@ def api_fnet_provento():
             "pesquisarGerenciadorDocumentosDados"
             "?d=1"
             "&s=0"
-            "&l=1000"
+            "&l=100"
             "&o%5B0%5D%5BdataReferencia%5D=desc"
             "&idCategoriaDocumento=0"
             "&idTipoDocumento=0"
