@@ -1361,22 +1361,19 @@ def api_fnet_provento():
 
         documento_alvo = None
 
-    for item in lista_documentos:
+        for item in lista_documentos:
 
-    tipo = str(item.get("tipoDocumento", ""))
-    situacao = str(item.get("situacaoDocumento", ""))
+            tipo = str(item.get("tipoDocumento", ""))
+            situacao = str(item.get("situacaoDocumento", ""))
 
-    print(
-        f"[FNET DEBUG] {ticker} | "
-        f"tipoDocumento={tipo!r} | "
-        f"situacaoDocumento={situacao!r} | "
-        f"id={item.get('id')}"
-    )
+            print(
+                f"[FNET DEBUG] {ticker} | "
+                f"tipoDocumento={tipo!r} | "
+                f"situacaoDocumento={situacao!r} | "
+                f"id={item.get('id')}"
+            )
 
-    if "Rendimentos" in tipo:
-        documento_alvo = item
-        break
-
+            if "Rendimentos" in tipo:
                 documento_alvo = item
                 break
 
