@@ -42,7 +42,7 @@ def converter_valor_brasileiro(valor):
 
 def converter_data_brasileira(data):
     try:
-        partes = data.strip().split("/")
+        partes = str(data).strip().split("/")
 
         if len(partes) != 3:
             return None
@@ -105,7 +105,7 @@ def buscar_proventos_b3(ticker):
         resposta = requests.get(
             url,
             headers=headers,
-            timeout=20
+            timeout=15
         )
 
         print(
@@ -239,7 +239,7 @@ def buscar_proventos_fundamentus(ticker):
         resposta = requests.get(
             url,
             headers=headers,
-            timeout=20
+            timeout=15
         )
 
         print(
@@ -286,12 +286,6 @@ def buscar_proventos_fundamentus(ticker):
             )
 
             valor_bruto = valores[3]
-
-            print(
-                f"[FUNDAMENTUS VALOR] {ticker} "
-                f"data={data_com} "
-                f"bruto={valor_bruto!r}"
-            )
 
             valor = converter_valor_brasileiro(
                 valor_bruto
@@ -513,7 +507,7 @@ def fnet_buscar_documentos(ticker, quantidade=10):
     pagina = sessao.get(
         pagina_url,
         headers=headers_pagina,
-        timeout=30
+        timeout=15
     )
 
     print(
@@ -555,7 +549,7 @@ def fnet_buscar_documentos(ticker, quantidade=10):
     resposta = sessao.get(
         documentos_url,
         headers=headers_documentos,
-        timeout=30
+        timeout=15
     )
 
     print(
@@ -695,7 +689,7 @@ def fnet_extrair_documento(sessao, documento_id):
     resposta = sessao.get(
         url,
         headers=headers,
-        timeout=30
+        timeout=15
     )
 
     print(
@@ -782,7 +776,7 @@ def fnet_extrair_dados_provento(
         resultado["dataPagamento"] = match.group(1)
 
     match = re.search(
-        r"Período de referência\s*([A-Za-zÀ-ÿ]+)",
+        r"Período de referência\s*:?\s*([A-Za-zÀ-ÿ]+)",
         texto_limpo,
         re.IGNORECASE
     )
@@ -807,6 +801,13 @@ def fnet_extrair_dados_provento(
 # ============================================================
 # FNET
 # FONTE SECUNDÁRIA DOS PROVENTOS
+#
+# IMPORTANTE:
+# Aqui NÃO buscamos 100 documentos.
+# O B3 já trouxe o histórico.
+#
+# O FNET entra para descobrir o período atual
+# quando o B3 não o possui.
 # ============================================================
 
 def buscar_proventos_fnet(ticker):
@@ -855,7 +856,7 @@ def buscar_proventos_fnet(ticker):
                 ),
                 "User-Agent": user_agent
             },
-            timeout=30
+            timeout=10
         )
 
         print(
@@ -866,12 +867,16 @@ def buscar_proventos_fnet(ticker):
         if not pagina.ok:
             return resultados
 
+        # ----------------------------------------------------
+        # SOMENTE OS DOCUMENTOS MAIS RECENTES
+        # ----------------------------------------------------
+
         documentos_url = (
             "https://fnet.bmfbovespa.com.br/fnet/publico/"
             "pesquisarGerenciadorDocumentosDados"
             "?d=1"
             "&s=0"
-            "&l=100"
+            "&l=20"
             "&o%5B0%5D%5BdataReferencia%5D=desc"
             "&idCategoriaDocumento=0"
             "&idTipoDocumento=0"
@@ -889,7 +894,7 @@ def buscar_proventos_fnet(ticker):
                 "Referer": pagina_url,
                 "X-Requested-With": "XMLHttpRequest"
             },
-            timeout=30
+            timeout=10
         )
 
         print(
@@ -952,8 +957,15 @@ def buscar_proventos_fnet(ticker):
         print(
             f"[FNET] {ticker}: "
             f"{len(documentos_proventos)} "
-            f"documentos de proventos"
+            f"documentos recentes de proventos"
         )
+
+        # ----------------------------------------------------
+        # DATA ATUAL
+        # ----------------------------------------------------
+
+        hoje = date.today()
+        primeiro_dia_mes = hoje.replace(day=1)
 
         documentos_processados = set()
 
@@ -1027,7 +1039,7 @@ def buscar_proventos_fnet(ticker):
                 if not data_pagamento_iso:
                     continue
 
-                resultados.append({
+                resultado = {
                     "ticker": ticker,
                     "dataCom": data_base_iso,
                     "dataPagamento": data_pagamento_iso,
@@ -1035,7 +1047,9 @@ def buscar_proventos_fnet(ticker):
                     "tipo": "Rendimento",
                     "fonte": "FNET",
                     "documentoId": documento_id
-                })
+                }
+
+                resultados.append(resultado)
 
                 print(
                     f"[FNET PROVENTO] {ticker} | "
@@ -1044,6 +1058,47 @@ def buscar_proventos_fnet(ticker):
                     f"PAG={data_pagamento_iso} | "
                     f"VALOR={valor}"
                 )
+
+                # ------------------------------------------------
+                # ENCONTROU O PERÍODO ATUAL:
+                # NÃO PRECISA ABRIR MAIS DOCUMENTOS.
+                # ------------------------------------------------
+
+                periodo_atual = False
+
+                try:
+                    data_com_obj = date.fromisoformat(
+                        data_base_iso
+                    )
+
+                    if data_com_obj >= primeiro_dia_mes:
+                        periodo_atual = True
+
+                except Exception:
+                    pass
+
+                if not periodo_atual:
+
+                    try:
+                        data_pag_obj = date.fromisoformat(
+                            data_pagamento_iso
+                        )
+
+                        if data_pag_obj >= hoje:
+                            periodo_atual = True
+
+                    except Exception:
+                        pass
+
+                if periodo_atual:
+
+                    print(
+                        f"[FNET] {ticker}: "
+                        f"período atual encontrado. "
+                        f"Parando busca FNET."
+                    )
+
+                    break
 
             except Exception as e:
 
@@ -1077,17 +1132,152 @@ def buscar_proventos_fnet(ticker):
 
 
 # ============================================================
-# CONSOLIDAÇÃO FINAL
+# CONSOLIDAÇÃO / REMOÇÃO DE DUPLICADOS
 #
-# CASCATA:
+# PRIORIDADE:
+# B3 > FNET > Fundamentus > yfinance
+#
+# O histórico existente NÃO é apagado.
+# ============================================================
+
+def consolidar_proventos(fontes):
+
+    prioridade = {
+        "B3": 1,
+        "FNET": 2,
+        "Fundamentus": 3,
+        "yfinance": 4
+    }
+
+    encontrados = {}
+
+    for lista in fontes:
+
+        if not isinstance(lista, list):
+            continue
+
+        for item in lista:
+
+            ticker = str(
+                item.get("ticker") or ""
+            ).upper().strip()
+
+            data_com = str(
+                item.get("dataCom") or ""
+            ).strip()
+
+            data_pagamento = str(
+                item.get("dataPagamento") or ""
+            ).strip()
+
+            tipo = str(
+                item.get("tipo") or "Rendimento"
+            ).strip()
+
+            if not ticker:
+                continue
+
+            # ------------------------------------------------
+            # FIIs normalmente possuem um rendimento por mês.
+            # Mantemos a mesma lógica de consolidação por
+            # mês de pagamento + tipo.
+            # ------------------------------------------------
+
+            if data_pagamento:
+
+                chave = (
+                    ticker,
+                    data_pagamento[:7],
+                    tipo.lower()
+                )
+
+            elif data_com:
+
+                chave = (
+                    ticker,
+                    data_com[:7],
+                    tipo.lower()
+                )
+
+            else:
+
+                chave = (
+                    ticker,
+                    data_com,
+                    data_pagamento,
+                    tipo.lower(),
+                    str(
+                        item.get("valorUnitario")
+                    )
+                )
+
+            fonte = str(
+                item.get("fonte") or ""
+            )
+
+            existente = encontrados.get(
+                chave
+            )
+
+            if existente is None:
+
+                encontrados[chave] = item
+
+            else:
+
+                fonte_existente = str(
+                    existente.get("fonte") or ""
+                )
+
+                p_existente = prioridade.get(
+                    fonte_existente,
+                    99
+                )
+
+                p_nova = prioridade.get(
+                    fonte,
+                    99
+                )
+
+                if p_nova < p_existente:
+
+                    encontrados[chave] = item
+
+    resultado = list(
+        encontrados.values()
+    )
+
+    resultado.sort(
+        key=lambda x: (
+            x.get("ticker") or "",
+            x.get("dataPagamento") or "",
+            x.get("dataCom") or ""
+        )
+    )
+
+    return resultado
+
+
+# ============================================================
+# CASCATA FINAL
 #
 # 1. B3          = PRINCIPAL
 # 2. FNET        = SECUNDÁRIA
 # 3. FUNDAMENTUS = COMPLEMENTO
 # 4. YFINANCE    = ÚLTIMO COMPLEMENTO
 #
-# A próxima fonte somente é consultada quando a anterior
-# não possui provento no período atual.
+# SEMPRE verifica o período atual.
+#
+# Se B3 já tiver o período atual:
+#     PARA.
+#
+# Se B3 não tiver:
+#     chama FNET.
+#
+# Se FNET encontrar:
+#     PARA.
+#
+# E assim por diante.
 # ============================================================
 
 def buscar_todos_proventos(ticker):
@@ -1139,37 +1329,36 @@ def buscar_todos_proventos(ticker):
 
         return False
 
-    # ============================================================
+    # ========================================================
     # 1 - B3
-    # ============================================================
+    # ========================================================
 
     print(
         f"[CASCATA] {ticker}: "
         f"consultando B3"
     )
 
-    b3_divs = buscar_proventos_b3(ticker)
+    b3_divs = buscar_proventos_b3(
+        ticker
+    )
 
-    if encontrou_periodo_atual(b3_divs):
+    if encontrou_periodo_atual(
+            b3_divs
+    ):
 
         print(
             f"[CASCATA] {ticker}: "
             f"B3 possui periodo atual. "
-            f"Demais fontes nao serao consultadas."
+            f"FNET/Fundamentus/yfinance nao serao consultados."
         )
 
-        b3_divs.sort(
-            key=lambda x: (
-                x.get("dataPagamento") or "",
-                x.get("dataCom") or ""
-            )
-        )
+        return consolidar_proventos([
+            b3_divs
+        ])
 
-        return b3_divs
-
-    # ============================================================
+    # ========================================================
     # 2 - FNET
-    # ============================================================
+    # ========================================================
 
     print(
         f"[CASCATA] {ticker}: "
@@ -1177,11 +1366,13 @@ def buscar_todos_proventos(ticker):
         f"Consultando FNET"
     )
 
-    fnet_divs = buscar_proventos_fnet(ticker)
+    fnet_divs = buscar_proventos_fnet(
+        ticker
+    )
 
-    resultado = b3_divs + fnet_divs
-
-    if encontrou_periodo_atual(fnet_divs):
+    if encontrou_periodo_atual(
+            fnet_divs
+    ):
 
         print(
             f"[CASCATA] {ticker}: "
@@ -1189,18 +1380,14 @@ def buscar_todos_proventos(ticker):
             f"Fundamentus/yfinance nao serao consultados."
         )
 
-        resultado.sort(
-            key=lambda x: (
-                x.get("dataPagamento") or "",
-                x.get("dataCom") or ""
-            )
-        )
+        return consolidar_proventos([
+            b3_divs,
+            fnet_divs
+        ])
 
-        return resultado
-
-    # ============================================================
+    # ========================================================
     # 3 - FUNDAMENTUS
-    # ============================================================
+    # ========================================================
 
     print(
         f"[CASCATA] {ticker}: "
@@ -1208,12 +1395,10 @@ def buscar_todos_proventos(ticker):
         f"Consultando Fundamentus"
     )
 
-    fundamentus_divs = buscar_proventos_fundamentus(
-        ticker
-    )
-
-    resultado.extend(
-        fundamentus_divs
+    fundamentus_divs = (
+        buscar_proventos_fundamentus(
+            ticker
+        )
     )
 
     if encontrou_periodo_atual(
@@ -1226,18 +1411,15 @@ def buscar_todos_proventos(ticker):
             f"yfinance nao sera consultado."
         )
 
-        resultado.sort(
-            key=lambda x: (
-                x.get("dataPagamento") or "",
-                x.get("dataCom") or ""
-            )
-        )
+        return consolidar_proventos([
+            b3_divs,
+            fnet_divs,
+            fundamentus_divs
+        ])
 
-        return resultado
-
-    # ============================================================
+    # ========================================================
     # 4 - YFINANCE
-    # ============================================================
+    # ========================================================
 
     print(
         f"[CASCATA] {ticker}: "
@@ -1245,20 +1427,18 @@ def buscar_todos_proventos(ticker):
         f"Consultando yfinance"
     )
 
-    yfinance_divs = buscar_proventos_yfinance(
-        ticker
-    )
-
-    resultado.extend(
-        yfinance_divs
-    )
-
-    resultado.sort(
-        key=lambda x: (
-            x.get("dataPagamento") or "",
-            x.get("dataCom") or ""
+    yfinance_divs = (
+        buscar_proventos_yfinance(
+            ticker
         )
     )
+
+    resultado = consolidar_proventos([
+        b3_divs,
+        fnet_divs,
+        fundamentus_divs,
+        yfinance_divs
+    ])
 
     print(
         f"[CASCATA] {ticker}: "
@@ -1333,7 +1513,7 @@ def api_fnet_provento():
                 ),
                 "User-Agent": user_agent
             },
-            timeout=30
+            timeout=15
         )
 
         print(
@@ -1375,7 +1555,7 @@ def api_fnet_provento():
                 "Referer": pagina_url,
                 "X-Requested-With": "XMLHttpRequest"
             },
-            timeout=30
+            timeout=15
         )
 
         print(
@@ -1484,17 +1664,9 @@ def api_fnet_provento():
                 )
             )
 
-            situacao = str(
-                item.get(
-                    "situacaoDocumento",
-                    ""
-                )
-            )
-
             print(
                 f"[FNET DEBUG] {ticker} | "
                 f"tipoDocumento={tipo!r} | "
-                f"situacaoDocumento={situacao!r} | "
                 f"id={item.get('id')}"
             )
 
@@ -1512,8 +1684,8 @@ def api_fnet_provento():
                 "cnpj": cnpj,
                 "etapa": "documento_provento",
                 "erro": (
-                    "Documento de Rendimentos e "
-                    "Amortizações nao encontrado"
+                    "Documento de Rendimentos "
+                    "nao encontrado"
                 )
             }), 404
 
@@ -1521,6 +1693,16 @@ def api_fnet_provento():
             sessao,
             documento_alvo["id"]
         )
+
+        if not documento.get("texto"):
+
+            return jsonify({
+                "status": "ERRO",
+                "ticker": ticker,
+                "cnpj": cnpj,
+                "etapa": "abrir_documento",
+                "erro": "Documento FNET sem texto"
+            }), 502
 
         dados_provento = (
             fnet_extrair_dados_provento(
@@ -1617,17 +1799,27 @@ def get_proventos_lote():
             "error": "Nenhum ticker informado"
         }), 400
 
-    lista_tickers = [
+    lista_tickers = list(dict.fromkeys([
         t.strip()
         for t in tickers_param.split(",")
         if t.strip()
-    ]
+    ]))
 
     resultado_geral = []
+
+    print(
+        f"[LOTE] Iniciando "
+        f"{len(lista_tickers)} tickers"
+    )
 
     for ticker in lista_tickers:
 
         try:
+
+            print(
+                f"[LOTE] Processando "
+                f"{ticker}"
+            )
 
             proventos = (
                 buscar_todos_proventos(
@@ -1647,6 +1839,16 @@ def get_proventos_lote():
             )
 
             continue
+
+    resultado_geral = consolidar_proventos([
+        resultado_geral
+    ])
+
+    print(
+        f"[LOTE] Finalizado: "
+        f"{len(resultado_geral)} "
+        f"proventos"
+    )
 
     return jsonify({
         "dividends": resultado_geral,
@@ -1754,3 +1956,4 @@ if __name__ == "__main__":
         port=5000,
         debug=True
     )
+    
