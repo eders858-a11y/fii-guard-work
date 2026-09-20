@@ -23,8 +23,6 @@ def limpar_html(texto):
 
 def converter_valor_brasileiro(valor):
     try:
-        # Mantém todas as casas decimais recebidas da fonte.
-        # Não arredonda.
         valor = (
             str(valor)
             .upper()
@@ -67,9 +65,6 @@ def buscar_proventos_b3(ticker):
     try:
         ticker = ticker.upper().strip()
 
-        # Ex.:
-        # TRXF11 -> TRXF
-        # BODB11 -> BODB
         codigo = re.sub(r"\d+$", "", ticker)
 
         payload = {
@@ -137,17 +132,6 @@ def buscar_proventos_b3(ticker):
         if not isinstance(cash_dividends, list):
             return resultados
 
-        # --------------------------------------------------------
-        # Todos os eventos de RENDIMENTO são preservados aqui.
-        #
-        # A consolidação abaixo continua responsável por:
-        # - eliminar duplicidades
-        # - comparar fontes
-        # - escolher o maior valor numérico
-        #
-        # Não arredonda os valores.
-        # --------------------------------------------------------
-
         for item in cash_dividends:
 
             label = str(
@@ -157,11 +141,6 @@ def buscar_proventos_b3(ticker):
             if label != "RENDIMENTO":
                 continue
 
-            # Para evento de rendimento, a data correta para
-            # representar a data-com é lastDatePrior.
-            #
-            # approvedOn fica como reserva caso lastDatePrior
-            # não exista.
             data_com = (
                     item.get("lastDatePrior")
                     or item.get("approvedOn")
@@ -229,7 +208,7 @@ def buscar_proventos_b3(ticker):
 
 # ============================================================
 # FUNDAMENTUS
-# FONTE DE RESERVA / COMPARAÇÃO
+# FONTE DE COMPLEMENTO
 # ============================================================
 
 def buscar_proventos_fundamentus(ticker):
@@ -295,15 +274,6 @@ def buscar_proventos_fundamentus(ticker):
                 for coluna in colunas
             ]
 
-            # ------------------------------------------------
-            # COLUNAS DO FUNDAMENTUS
-            #
-            # 0 = Data COM
-            # 1 = Tipo
-            # 2 = Data Pagamento
-            # 3 = Valor
-            # ------------------------------------------------
-
             data_com = converter_data_brasileira(
                 valores[0]
             )
@@ -314,7 +284,6 @@ def buscar_proventos_fundamentus(ticker):
                 valores[2]
             )
 
-            # Valor bruto recebido da fonte.
             valor_bruto = valores[3]
 
             print(
@@ -357,7 +326,7 @@ def buscar_proventos_fundamentus(ticker):
 
 # ============================================================
 # YFINANCE
-# FONTE DE RESERVA / COMPARAÇÃO
+# ÚLTIMO COMPLEMENTO
 # ============================================================
 
 def buscar_proventos_yfinance(ticker):
@@ -404,307 +373,7 @@ def buscar_proventos_yfinance(ticker):
 
 
 # ============================================================
-# CONSOLIDAÇÃO
-#
-# TODAS AS FONTES SÃO CONSULTADAS.
-#
-# B3 = FONTE PRINCIPAL
-# Fundamentus = RESERVA / COMPARAÇÃO
-# yfinance = RESERVA / COMPARAÇÃO
-#
-# Para o mesmo ticker + data COM:
-#
-# B3          = 0,080
-# Fundamentus = 0,083
-#
-# Resultado = 0,083
-#
-# A regra continua sendo pelo MAIOR VALOR NUMÉRICO,
-# e não pela quantidade de casas decimais.
-# ============================================================
-
-def buscar_todos_proventos(ticker):
-    ticker = ticker.upper().strip()
-
-    # ============================================================
-    # BUSCA NAS TRÊS FONTES
-    # ============================================================
-
-    b3_divs = buscar_proventos_b3(ticker)
-    fundamentus_divs = buscar_proventos_fundamentus(ticker)
-    yfinance_divs = buscar_proventos_yfinance(ticker)
-
-    todas_fontes = (
-            b3_divs
-            + fundamentus_divs
-            + yfinance_divs
-    )
-
-    # ============================================================
-    # CONSOLIDAÇÃO
-    #
-    # REGRA PRINCIPAL:
-    # 1. Um único provento por:
-    #       TICKER + ANO/MÊS DA DATA DE PAGAMENTO + TIPO
-    #
-    # 2. Se duas fontes representarem o mesmo provento,
-    #    fica somente um registro.
-    #
-    # 3. O MAIOR valor numérico encontrado é utilizado.
-    #
-    # 4. B3 tem prioridade para as DATAS.
-    #
-    # 5. Se não existir B3, Fundamentus é utilizado para as datas.
-    #
-    # 6. yfinance fica como fonte de comparação/reserva.
-    #
-    # Não há arredondamento dos valores.
-    # ============================================================
-
-    consolidados = {}
-
-    for item in todas_fontes:
-
-        ticker_item = str(
-            item.get("ticker", ticker)
-        ).upper().strip()
-
-        data_com = item.get("dataCom")
-        data_pagamento = item.get("dataPagamento")
-
-        valor = item.get(
-            "valorUnitario"
-        )
-
-        tipo = str(
-            item.get("tipo", "Rendimento")
-        ).strip()
-
-        fonte = item.get(
-            "fonte",
-            "desconhecida"
-        )
-
-        if (
-                not data_com
-                or not data_pagamento
-                or valor is None
-        ):
-            continue
-
-        # --------------------------------------------------------
-        # Converte valor somente para comparação.
-        # Não arredonda.
-        # --------------------------------------------------------
-
-        try:
-            valor = float(valor)
-
-        except Exception:
-            continue
-
-        if valor <= 0:
-            continue
-
-        # --------------------------------------------------------
-        # Normaliza data de pagamento
-        # --------------------------------------------------------
-
-        data_pagamento_str = str(
-            data_pagamento
-        )
-
-        partes_pagamento = (
-            data_pagamento_str.split("-")
-        )
-
-        if len(partes_pagamento) >= 2:
-
-            ano_mes_pagamento = (
-                f"{partes_pagamento[0]}-"
-                f"{partes_pagamento[1]}"
-            )
-
-        else:
-
-            ano_mes_pagamento = (
-                data_pagamento_str
-            )
-
-        # --------------------------------------------------------
-        # Normaliza tipo
-        # --------------------------------------------------------
-
-        tipo_normalizado = tipo.upper()
-
-        if "AMORT" in tipo_normalizado:
-
-            tipo_chave = "AMORTIZATION"
-
-        else:
-
-            tipo_chave = "INCOME"
-
-        # --------------------------------------------------------
-        # CHAVE FINAL
-        #
-        # Ticker + mês do pagamento + tipo
-        #
-        # Mantida a mesma lógica existente para evitar
-        # duplicação.
-        # --------------------------------------------------------
-
-        chave = (
-            ticker_item,
-            ano_mes_pagamento,
-            tipo_chave
-        )
-
-        # --------------------------------------------------------
-        # Primeiro registro encontrado
-        # --------------------------------------------------------
-
-        if chave not in consolidados:
-
-            consolidados[chave] = {
-                "registro": item.copy(),
-                "maiorValor": valor,
-                "temB3": fonte == "B3",
-                "temFundamentus": (
-                        fonte == "Fundamentus"
-                )
-            }
-
-            continue
-
-        atual = consolidados[chave]
-
-        # --------------------------------------------------------
-        # Se encontrou valor maior, utiliza o maior valor.
-        #
-        # Mantém a regra anterior sem arredondar.
-        # --------------------------------------------------------
-
-        if valor > atual["maiorValor"]:
-
-            print(
-                f"[MAIOR VALOR] {ticker_item} "
-                f"{ano_mes_pagamento}: "
-                f"{atual['maiorValor']} -> {valor} "
-                f"({fonte})"
-            )
-
-            atual["maiorValor"] = valor
-
-        # --------------------------------------------------------
-        # B3 tem prioridade para as DATAS.
-        #
-        # Se o primeiro registro foi Fundamentus ou yfinance
-        # e depois encontramos B3, substituímos o registro
-        # pelas datas da B3.
-        # --------------------------------------------------------
-
-        if fonte == "B3":
-
-            if not atual["temB3"]:
-
-                atual["registro"] = item.copy()
-                atual["temB3"] = True
-
-        # --------------------------------------------------------
-        # Fundamentus só tem prioridade caso B3 ainda não exista.
-        #
-        # Se já houver B3, as datas B3 permanecem.
-        # --------------------------------------------------------
-
-        elif fonte == "Fundamentus":
-
-            if (
-                    not atual["temB3"]
-                    and not atual["temFundamentus"]
-            ):
-
-                atual["registro"] = item.copy()
-                atual["temFundamentus"] = True
-
-        # --------------------------------------------------------
-        # O valor final sempre será o maior encontrado.
-        # --------------------------------------------------------
-
-        atual["registro"]["valorUnitario"] = (
-            atual["maiorValor"]
-        )
-
-    # ============================================================
-    # MONTA RESULTADO FINAL
-    # ============================================================
-
-    resultado = [
-        dados["registro"]
-        for dados in consolidados.values()
-    ]
-
-    # ============================================================
-    # ORDENA POR DATA DE PAGAMENTO
-    # ============================================================
-
-    resultado.sort(
-        key=lambda x: (
-            x.get("dataPagamento") or "",
-            x.get("dataCom") or ""
-        )
-    )
-
-    # ============================================================
-    # LOG FINAL
-    # ============================================================
-
-    fontes = set(
-        item.get("fonte", "")
-        for item in resultado
-    )
-
-    print(
-        f"[CONSOLIDADO] {ticker}: "
-        f"{len(resultado)} proventos "
-        f"comparando B3 + FUNDAMENTUS + YFINANCE "
-        f"| fontes finais: "
-        f"{', '.join(fontes) or 'nenhuma'}"
-    )
-
-    # ------------------------------------------------------------
-    # Mostra os resultados finais para conferência
-    # ------------------------------------------------------------
-
-    for item in resultado:
-
-        print(
-            f"[PROVENTO FINAL] "
-            f"{item.get('ticker')} | "
-            f"COM={item.get('dataCom')} | "
-            f"PAG={item.get('dataPagamento')} | "
-            f"VALOR={item.get('valorUnitario')} | "
-            f"FONTE={item.get('fonte')}"
-        )
-
-    return resultado
-
-
-# ============================================================
-# TESTE FNET - CONSULTA DIRETA
-#
-# Fluxo:
-# Ticker
-#   ↓
-# CNPJ
-#   ↓
-# abrirGerenciadorDocumentosCVM
-#   ↓
-# pesquisarGerenciadorDocumentosDados
-#   ↓
-# ID do documento
-#   ↓
-# exibirDocumento
+# CNPJ DOS FIIs PARA FNET
 # ============================================================
 
 FII_CNPJ = {
@@ -776,7 +445,7 @@ FII_CNPJ = {
     "GARE11": "37.295.919/0001-60",
     "DAMA11": "53.866.872/0001-01",
 
-    # --- FUNDOS DE FUNDOS (FOFs) ---
+    # --- FUNDOS DE FUNDOS ---
     "BCFF11": "11.026.627/0001-38",
     "RBRF11": "27.529.279/0001-51",
     "HFOF11": "18.307.582/0001-19",
@@ -787,6 +456,11 @@ FII_CNPJ = {
     "MFII11": "16.915.968/0001-88",
 }
 
+
+# ============================================================
+# FNET - FUNÇÕES AUXILIARES
+# ============================================================
+
 def fnet_normalizar_cnpj(cnpj):
     return re.sub(r"\D", "", str(cnpj))
 
@@ -795,6 +469,10 @@ def fnet_obter_cnpj(ticker):
     ticker = ticker.strip().upper()
     return FII_CNPJ.get(ticker)
 
+
+# ============================================================
+# FNET - BUSCA DOCUMENTOS
+# ============================================================
 
 def fnet_buscar_documentos(ticker, quantidade=10):
 
@@ -813,11 +491,6 @@ def fnet_buscar_documentos(ticker, quantidade=10):
         f"[FNET TESTE] {ticker}: "
         f"CNPJ={cnpj_normalizado}"
     )
-
-    # --------------------------------------------------------
-    # IMPORTANTE:
-    # O TS primeiro abre esta página para criar a sessão.
-    # --------------------------------------------------------
 
     pagina_url = (
         "https://fnet.bmfbovespa.com.br/fnet/publico/"
@@ -838,8 +511,6 @@ def fnet_buscar_documentos(ticker, quantidade=10):
         ),
     }
 
-    # Session é importante porque a segunda chamada
-    # depende da sessão criada pela primeira.
     sessao = requests.Session()
 
     pagina = sessao.get(
@@ -861,12 +532,6 @@ def fnet_buscar_documentos(ticker, quantidade=10):
             "http": pagina.status_code,
             "erro": "Falha ao abrir pagina FNET"
         }
-
-    # --------------------------------------------------------
-    # SEGUNDA CHAMADA
-    #
-    # Esta URL é exatamente a do código TS enviado.
-    # --------------------------------------------------------
 
     documentos_url = (
         "https://fnet.bmfbovespa.com.br/fnet/publico/"
@@ -1002,6 +667,10 @@ def fnet_buscar_documentos(ticker, quantidade=10):
     }
 
 
+# ============================================================
+# FNET - ABRIR DOCUMENTO
+# ============================================================
+
 def fnet_extrair_documento(sessao, documento_id):
 
     url = (
@@ -1060,6 +729,10 @@ def fnet_extrair_documento(sessao, documento_id):
     }
 
 
+# ============================================================
+# FNET - EXTRAI DADOS DO PROVENTO
+# ============================================================
+
 def fnet_extrair_dados_provento(
         texto,
         documento_id
@@ -1096,7 +769,6 @@ def fnet_extrair_dados_provento(
     )
 
     if match:
-
         resultado["valorProvento"] = (
             converter_valor_brasileiro(
                 match.group(1)
@@ -1128,7 +800,6 @@ def fnet_extrair_dados_provento(
     )
 
     if match:
-
         resultado["isentoIR"] = (
                 match.group(1).lower() == "sim"
         )
@@ -1137,7 +808,574 @@ def fnet_extrair_dados_provento(
 
 
 # ============================================================
+# FNET
+# FONTE SECUNDÁRIA DOS PROVENTOS
+# ============================================================
+
+def buscar_proventos_fnet(ticker):
+
+    resultados = []
+
+    try:
+
+        ticker = ticker.upper().strip()
+
+        cnpj = fnet_obter_cnpj(ticker)
+
+        if not cnpj:
+
+            print(
+                f"[FNET] {ticker}: CNPJ nao encontrado"
+            )
+
+            return resultados
+
+        cnpj_normalizado = fnet_normalizar_cnpj(
+            cnpj
+        )
+
+        user_agent = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/140.0 Safari/537.36"
+        )
+
+        pagina_url = (
+            "https://fnet.bmfbovespa.com.br/fnet/publico/"
+            "abrirGerenciadorDocumentosCVM"
+            f"?cnpjFundo={cnpj_normalizado}"
+        )
+
+        sessao = requests.Session()
+
+        pagina = sessao.get(
+            pagina_url,
+            headers={
+                "Accept": (
+                    "text/html,application/xhtml+xml,"
+                    "application/xml;q=0.9,*/*;q=0.8"
+                ),
+                "User-Agent": user_agent
+            },
+            timeout=30
+        )
+
+        print(
+            f"[FNET] {ticker}: "
+            f"gerenciador HTTP {pagina.status_code}"
+        )
+
+        if not pagina.ok:
+            return resultados
+
+        documentos_url = (
+            "https://fnet.bmfbovespa.com.br/fnet/publico/"
+            "pesquisarGerenciadorDocumentosDados"
+            "?d=1"
+            "&s=0"
+            "&l=100"
+            "&o%5B0%5D%5BdataReferencia%5D=desc"
+            "&idCategoriaDocumento=0"
+            "&idTipoDocumento=0"
+            "&idEspecieDocumento=0"
+            "&isSession=true"
+        )
+
+        resposta = sessao.get(
+            documentos_url,
+            headers={
+                "Accept": (
+                    "application/json, text/javascript, */*; q=0.01"
+                ),
+                "User-Agent": user_agent,
+                "Referer": pagina_url,
+                "X-Requested-With": "XMLHttpRequest"
+            },
+            timeout=30
+        )
+
+        print(
+            f"[FNET] {ticker}: "
+            f"documentos HTTP {resposta.status_code}"
+        )
+
+        if not resposta.ok:
+            return resultados
+
+        try:
+            dados = resposta.json()
+
+        except Exception as e:
+
+            print(
+                f"[FNET] {ticker}: "
+                f"resposta nao e JSON: {e}"
+            )
+
+            return resultados
+
+        documentos = dados.get(
+            "data",
+            []
+        )
+
+        if not isinstance(documentos, list):
+            documentos = []
+
+        documentos_proventos = []
+
+        for item in documentos:
+
+            tipo = str(
+                item.get(
+                    "tipoDocumento",
+                    ""
+                )
+            )
+
+            if "Rendimentos" not in tipo:
+                continue
+
+            if not item.get("id"):
+                continue
+
+            documento_id = int(
+                item["id"]
+            )
+
+            documentos_proventos.append({
+                "id": documento_id,
+                "dataReferencia": item.get(
+                    "dataReferencia",
+                    ""
+                )
+            })
+
+        print(
+            f"[FNET] {ticker}: "
+            f"{len(documentos_proventos)} "
+            f"documentos de proventos"
+        )
+
+        documentos_processados = set()
+
+        for item in documentos_proventos:
+
+            documento_id = item["id"]
+
+            if documento_id in documentos_processados:
+                continue
+
+            documentos_processados.add(
+                documento_id
+            )
+
+            try:
+
+                documento = fnet_extrair_documento(
+                    sessao,
+                    documento_id
+                )
+
+                if not documento.get("texto"):
+                    continue
+
+                dados_provento = (
+                    fnet_extrair_dados_provento(
+                        documento["texto"],
+                        documento_id
+                    )
+                )
+
+                data_base = dados_provento.get(
+                    "dataBase"
+                )
+
+                data_pagamento = dados_provento.get(
+                    "dataPagamento"
+                )
+
+                valor = dados_provento.get(
+                    "valorProvento"
+                )
+
+                if not data_base:
+                    continue
+
+                if not data_pagamento:
+                    continue
+
+                if valor is None:
+                    continue
+
+                if valor <= 0:
+                    continue
+
+                data_base_iso = (
+                    converter_data_brasileira(
+                        data_base
+                    )
+                )
+
+                data_pagamento_iso = (
+                    converter_data_brasileira(
+                        data_pagamento
+                    )
+                )
+
+                if not data_base_iso:
+                    continue
+
+                if not data_pagamento_iso:
+                    continue
+
+                resultados.append({
+                    "ticker": ticker,
+                    "dataCom": data_base_iso,
+                    "dataPagamento": data_pagamento_iso,
+                    "valorUnitario": float(valor),
+                    "tipo": "Rendimento",
+                    "fonte": "FNET",
+                    "documentoId": documento_id
+                })
+
+                print(
+                    f"[FNET PROVENTO] {ticker} | "
+                    f"ID={documento_id} | "
+                    f"COM={data_base_iso} | "
+                    f"PAG={data_pagamento_iso} | "
+                    f"VALOR={valor}"
+                )
+
+            except Exception as e:
+
+                print(
+                    f"[FNET] {ticker}: "
+                    f"falha documento "
+                    f"{documento_id}: {e}"
+                )
+
+                continue
+
+        resultados.sort(
+            key=lambda x: (
+                x.get("dataPagamento") or "",
+                x.get("dataCom") or ""
+            )
+        )
+
+        print(
+            f"[FNET] {ticker}: "
+            f"{len(resultados)} proventos encontrados"
+        )
+
+    except Exception as e:
+
+        print(
+            f"[FNET] FALHA {ticker}: {e}"
+        )
+
+    return resultados
+
+
+# ============================================================
+# CONSOLIDAÇÃO FINAL
+#
+# HIERARQUIA:
+#
+# 1. B3          = PRINCIPAL
+# 2. FNET        = SECUNDÁRIA
+# 3. FUNDAMENTUS = COMPLEMENTO
+# 4. YFINANCE    = ÚLTIMO COMPLEMENTO
+#
+# NÃO USA MAIS "MAIOR VALOR".
+#
+# Se B3 tiver 0,08355 e FNET tiver 0,084:
+# RESULTADO = 0,08355 DA B3.
+#
+# NÃO HÁ ARREDONDAMENTO.
+# ============================================================
+
+def buscar_todos_proventos(ticker):
+
+    ticker = ticker.upper().strip()
+
+    # ============================================================
+    # TODAS AS FONTES
+    # ============================================================
+
+    b3_divs = buscar_proventos_b3(ticker)
+
+    fnet_divs = buscar_proventos_fnet(ticker)
+
+    fundamentus_divs = buscar_proventos_fundamentus(
+        ticker
+    )
+
+    yfinance_divs = buscar_proventos_yfinance(
+        ticker
+    )
+
+    todas_fontes = (
+            b3_divs
+            + fnet_divs
+            + fundamentus_divs
+            + yfinance_divs
+    )
+
+    # ============================================================
+    # PRIORIDADE
+    # ============================================================
+
+    prioridade = {
+        "B3": 1,
+        "FNET": 2,
+        "Fundamentus": 3,
+        "yfinance": 4
+    }
+
+    consolidados = {}
+
+    # ============================================================
+    # PROCESSA
+    # ============================================================
+
+    for item in todas_fontes:
+
+        ticker_item = str(
+            item.get(
+                "ticker",
+                ticker
+            )
+        ).upper().strip()
+
+        data_com = item.get(
+            "dataCom"
+        )
+
+        data_pagamento = item.get(
+            "dataPagamento"
+        )
+
+        valor = item.get(
+            "valorUnitario"
+        )
+
+        tipo = str(
+            item.get(
+                "tipo",
+                "Rendimento"
+            )
+        ).strip()
+
+        fonte = str(
+            item.get(
+                "fonte",
+                "desconhecida"
+            )
+        ).strip()
+
+        if (
+                not data_com
+                or not data_pagamento
+                or valor is None
+        ):
+            continue
+
+        try:
+            valor = float(valor)
+
+        except Exception:
+            continue
+
+        if valor <= 0:
+            continue
+
+        # --------------------------------------------------------
+        # MÊS DE PAGAMENTO
+        # --------------------------------------------------------
+
+        partes_pagamento = str(
+            data_pagamento
+        ).split("-")
+
+        if len(partes_pagamento) >= 2:
+
+            ano_mes_pagamento = (
+                f"{partes_pagamento[0]}-"
+                f"{partes_pagamento[1]}"
+            )
+
+        else:
+
+            ano_mes_pagamento = str(
+                data_pagamento
+            )
+
+        # --------------------------------------------------------
+        # TIPO
+        # --------------------------------------------------------
+
+        tipo_normalizado = tipo.upper()
+
+        if "AMORT" in tipo_normalizado:
+
+            tipo_chave = "AMORTIZATION"
+
+        else:
+
+            tipo_chave = "INCOME"
+
+        # --------------------------------------------------------
+        # CHAVE
+        # --------------------------------------------------------
+
+        chave = (
+            ticker_item,
+            ano_mes_pagamento,
+            tipo_chave
+        )
+
+        # --------------------------------------------------------
+        # PRIMEIRO REGISTRO
+        # --------------------------------------------------------
+
+        if chave not in consolidados:
+
+            consolidados[chave] = {
+                "registro": item.copy(),
+                "fontePrioritaria": fonte
+            }
+
+            print(
+                f"[CONSOLIDADO NOVO] "
+                f"{ticker_item} | "
+                f"{ano_mes_pagamento} | "
+                f"{fonte} | "
+                f"VALOR={valor}"
+            )
+
+            continue
+
+        atual = consolidados[chave]
+
+        fonte_atual = str(
+            atual["fontePrioritaria"]
+        )
+
+        prioridade_atual = prioridade.get(
+            fonte_atual,
+            99
+        )
+
+        prioridade_nova = prioridade.get(
+            fonte,
+            99
+        )
+
+        # --------------------------------------------------------
+        # FONTE NOVA É MAIS PRIORITÁRIA
+        # --------------------------------------------------------
+
+        if prioridade_nova < prioridade_atual:
+
+            print(
+                f"[PRIORIDADE] "
+                f"{ticker_item} | "
+                f"{ano_mes_pagamento}: "
+                f"{fonte_atual} -> {fonte}"
+            )
+
+            consolidados[chave] = {
+                "registro": item.copy(),
+                "fontePrioritaria": fonte
+            }
+
+            continue
+
+        # --------------------------------------------------------
+        # FONTE NOVA É MENOS PRIORITÁRIA
+        #
+        # NÃO substitui a fonte principal mesmo se o valor
+        # for diferente ou maior.
+        # --------------------------------------------------------
+
+        if prioridade_nova > prioridade_atual:
+
+            print(
+                f"[IGNORADO] "
+                f"{ticker_item} | "
+                f"{ano_mes_pagamento}: "
+                f"{fonte}={valor} "
+                f"(mantida {fonte_atual})"
+            )
+
+            continue
+
+        # --------------------------------------------------------
+        # MESMA FONTE
+        # --------------------------------------------------------
+
+        print(
+            f"[DUPLICADO] "
+            f"{ticker_item} | "
+            f"{ano_mes_pagamento} | "
+            f"fonte={fonte}"
+        )
+
+    # ============================================================
+    # RESULTADO
+    # ============================================================
+
+    resultado = [
+        dados["registro"]
+        for dados in consolidados.values()
+    ]
+
+    resultado.sort(
+        key=lambda x: (
+            x.get("dataPagamento") or "",
+            x.get("dataCom") or ""
+        )
+    )
+
+    # ============================================================
+    # LOG FINAL
+    # ============================================================
+
+    fontes = set(
+        item.get(
+            "fonte",
+            ""
+        )
+        for item in resultado
+    )
+
+    print(
+        f"[CONSOLIDADO] {ticker}: "
+        f"{len(resultado)} proventos "
+        f"| fontes finais: "
+        f"{', '.join(sorted(fontes)) or 'nenhuma'}"
+    )
+
+    for item in resultado:
+
+        print(
+            f"[PROVENTO FINAL] "
+            f"{item.get('ticker')} | "
+            f"COM={item.get('dataCom')} | "
+            f"PAG={item.get('dataPagamento')} | "
+            f"VALOR={item.get('valorUnitario')} | "
+            f"FONTE={item.get('fonte')}"
+        )
+
+    return resultado
+
+
+# ============================================================
 # API FNET
+# CONSULTA DIRETA
 # ============================================================
 
 @app.route(
@@ -1160,8 +1398,6 @@ def api_fnet_provento():
 
     try:
 
-        ticker = ticker.upper().strip()
-
         cnpj = fnet_obter_cnpj(
             ticker
         )
@@ -1178,10 +1414,6 @@ def api_fnet_provento():
             fnet_normalizar_cnpj(cnpj)
         )
 
-        # ----------------------------------------------------
-        # SESSION
-        # ----------------------------------------------------
-
         sessao = requests.Session()
 
         user_agent = (
@@ -1191,9 +1423,9 @@ def api_fnet_provento():
             "Chrome/140.0 Safari/537.36"
         )
 
-        # ----------------------------------------------------
+        # --------------------------------------------------------
         # 1 - ABRE GERENCIADOR
-        # ----------------------------------------------------
+        # --------------------------------------------------------
 
         pagina_url = (
             "https://fnet.bmfbovespa.com.br/fnet/publico/"
@@ -1229,9 +1461,9 @@ def api_fnet_provento():
                 "http": pagina.status_code
             }), 502
 
-        # ----------------------------------------------------
+        # --------------------------------------------------------
         # 2 - PESQUISA DOCUMENTOS
-        # ----------------------------------------------------
+        # --------------------------------------------------------
 
         documentos_url = (
             "https://fnet.bmfbovespa.com.br/fnet/publico/"
@@ -1301,9 +1533,9 @@ def api_fnet_provento():
         ):
             documentos = []
 
-        # ----------------------------------------------------
+        # --------------------------------------------------------
         # 3 - PEGA OS IDs
-        # ----------------------------------------------------
+        # --------------------------------------------------------
 
         lista_documentos = []
 
@@ -1358,16 +1590,27 @@ def api_fnet_provento():
                 "linkDocumento": link
             })
 
-        # ----------------------------------------------------
-        # 4 - PROCURA O DOCUMENTO DE PROVENTOS
-        # ----------------------------------------------------
+        # --------------------------------------------------------
+        # 4 - PROCURA DOCUMENTO DE PROVENTOS
+        # --------------------------------------------------------
 
         documento_alvo = None
 
         for item in lista_documentos:
 
-            tipo = str(item.get("tipoDocumento", ""))
-            situacao = str(item.get("situacaoDocumento", ""))
+            tipo = str(
+                item.get(
+                    "tipoDocumento",
+                    ""
+                )
+            )
+
+            situacao = str(
+                item.get(
+                    "situacaoDocumento",
+                    ""
+                )
+            )
 
             print(
                 f"[FNET DEBUG] {ticker} | "
@@ -1377,7 +1620,9 @@ def api_fnet_provento():
             )
 
             if "Rendimentos" in tipo:
+
                 documento_alvo = item
+
                 break
 
         if not documento_alvo:
@@ -1389,7 +1634,7 @@ def api_fnet_provento():
                 "etapa": "documento_provento",
                 "erro": (
                     "Documento de Rendimentos e "
-                    "Amortizações não encontrado"
+                    "Amortizações nao encontrado"
                 )
             }), 404
 
@@ -1397,10 +1642,6 @@ def api_fnet_provento():
             sessao,
             documento_alvo["id"]
         )
-
-        # ----------------------------------------------------
-        # RESULTADO DO TESTE
-        # ----------------------------------------------------
 
         dados_provento = (
             fnet_extrair_dados_provento(
@@ -1536,7 +1777,6 @@ def get_proventos_lote():
 
 # ============================================================
 # COTAÇÃO
-#
 # YFINANCE
 # ============================================================
 
@@ -1562,10 +1802,6 @@ def get_cotacao(ticker):
 
         preco = None
 
-        # ----------------------------------------------------
-        # PRIMEIRA TENTATIVA
-        # ----------------------------------------------------
-
         try:
 
             preco = ativo.fast_info.get(
@@ -1575,10 +1811,6 @@ def get_cotacao(ticker):
         except Exception:
 
             pass
-
-        # ----------------------------------------------------
-        # SEGUNDA TENTATIVA
-        # ----------------------------------------------------
 
         if preco is None:
 
@@ -1592,10 +1824,6 @@ def get_cotacao(ticker):
 
                 pass
 
-        # ----------------------------------------------------
-        # NÃO ENCONTROU
-        # ----------------------------------------------------
-
         if preco is None:
 
             return jsonify({
@@ -1604,10 +1832,6 @@ def get_cotacao(ticker):
                 "status": "ERRO",
                 "message": "Cotacao nao encontrada"
             }), 404
-
-        # ----------------------------------------------------
-        # RETORNA COTAÇÃO
-        # ----------------------------------------------------
 
         return jsonify({
             "ticker": ticker,
@@ -1634,8 +1858,8 @@ def home():
 
     return (
         "<h1>Servidor FII Guard Ativo</h1>"
-        "<p>Proventos: B3 + Fundamentus + yfinance "
-        "comparando pelo maior valor</p>"
+        "<p>Proventos: B3 principal + FNET secundario "
+        "+ Fundamentus + yfinance</p>"
         "<p>Cotacoes: yfinance</p>"
     )
 
