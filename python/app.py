@@ -1447,7 +1447,78 @@ def buscar_todos_proventos(ticker):
 
     return resultado
 
+# ============================================================
+# ROTA DE PROVENTOS EM LOTE (PARALELO)
+# ============================================================
 
+import concurrent.futures
+
+@app.route("/api/proventos-lote", methods=["GET"])
+def get_proventos_lote():
+    tickers_param = request.args.get("tickers", "")
+    if not tickers_param:
+        return jsonify({
+            "error": "Nenhum ticker fornecido. Use ?tickers=ALZR,XPML,...",
+            "status": "ERRO"
+        }), 400
+
+    tickers = [
+        t.strip().upper()
+        for t in tickers_param.split(",")
+        if t.strip()
+    ]
+
+    print(f"[LOTE] Iniciando busca para {len(tickers)} ativos: {tickers}")
+
+    def processar_ticker(ticker):
+        # Executa a cascata padrão para cada ticker individualmente
+        res_b3 = buscar_proventos_b3(ticker)
+        if encontrou_periodo_atual(res_b3):
+            return res_b3
+
+        res_fnet = buscar_proventos_fnet(ticker)
+        if encontrou_periodo_atual(res_fnet):
+            return consolidar_proventos([res_b3, res_fnet])
+
+        res_fundamentus = buscar_proventos_fundamentus(ticker)
+        if encontrou_periodo_atual(res_fundamentus):
+            return consolidar_proventos([res_b3, res_fnet, res_fundamentus])
+
+        res_yf = buscar_proventos_yfinance(ticker)
+        return consolidar_proventos([res_b3, res_fnet, res_fundamentus, res_yf])
+
+    resultado_geral = []
+
+    # Usa ThreadPoolExecutor para consultar os FIIs em paralelo (controlando lotes de 5)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        future_to_ticker = {
+            executor.submit(processar_ticker, ticker): ticker
+            for ticker in tickers
+        }
+
+        for future in concurrent.futures.as_completed(future_to_ticker):
+            ticker = future_to_ticker[future]
+            try:
+                dados_fii = future.result()
+                if dados_fii:
+                    resultado_geral.extend(dados_fii)
+            except Exception as e:
+                print(f"[LOTE ERRO] Falha ao processar {ticker}: {e}")
+
+    resultado_geral = consolidar_proventos([
+        resultado_geral
+    ])
+
+    print(
+        f"[LOTE] Finalizado: "
+        f"{len(resultado_geral)} "
+        f"proventos consolidados"
+    )
+
+    return jsonify({
+        "dividends": resultado_geral,
+        "status": "OK"
+    })
 # ============================================================
 # API FNET
 # CONSULTA DIRETA
