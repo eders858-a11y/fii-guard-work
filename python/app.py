@@ -1259,6 +1259,56 @@ def consolidar_proventos(fontes):
 
 
 # ============================================================
+# VERIFICA SE A LISTA POSSUI O PERIODO ATUAL
+# ============================================================
+
+def encontrou_periodo_atual(lista):
+
+    hoje = date.today()
+    primeiro_dia_mes = hoje.replace(day=1)
+
+    if not isinstance(lista, list):
+        return False
+
+    for item in lista:
+
+        if not isinstance(item, dict):
+            continue
+
+        data_com = str(
+            item.get("dataCom") or ""
+        ).strip()
+
+        data_pagamento = str(
+            item.get("dataPagamento") or ""
+        ).strip()
+
+        if data_com:
+            try:
+                data_com_obj = date.fromisoformat(data_com)
+
+                if data_com_obj >= primeiro_dia_mes:
+                    return True
+
+            except Exception:
+                pass
+
+        if data_pagamento:
+            try:
+                data_pagamento_obj = date.fromisoformat(
+                    data_pagamento
+                )
+
+                if data_pagamento_obj >= hoje:
+                    return True
+
+            except Exception:
+                pass
+
+    return False
+
+
+# ============================================================
 # CASCATA FINAL
 #
 # 1. B3          = PRINCIPAL
@@ -1283,51 +1333,6 @@ def consolidar_proventos(fontes):
 def buscar_todos_proventos(ticker):
 
     ticker = ticker.upper().strip()
-
-    hoje = date.today()
-    primeiro_dia_mes = hoje.replace(day=1)
-
-    def encontrou_periodo_atual(lista):
-
-        for item in lista:
-
-            data_com = str(
-                item.get("dataCom") or ""
-            ).strip()
-
-            data_pagamento = str(
-                item.get("dataPagamento") or ""
-            ).strip()
-
-            if data_com:
-
-                try:
-
-                    data_com_obj = date.fromisoformat(
-                        data_com
-                    )
-
-                    if data_com_obj >= primeiro_dia_mes:
-                        return True
-
-                except Exception:
-                    pass
-
-            if data_pagamento:
-
-                try:
-
-                    data_pagamento_obj = date.fromisoformat(
-                        data_pagamento
-                    )
-
-                    if data_pagamento_obj >= hoje:
-                        return True
-
-                except Exception:
-                    pass
-
-        return False
 
     # ========================================================
     # 1 - B3
@@ -1447,18 +1452,32 @@ def buscar_todos_proventos(ticker):
 
     return resultado
 
+
 # ============================================================
 # ROTA DE PROVENTOS EM LOTE (PARALELO)
 # ============================================================
 
 import concurrent.futures
 
-@app.route("/api/proventos-lote", methods=["GET"])
+
+@app.route(
+    "/api/proventos-lote",
+    methods=["GET"]
+)
 def get_proventos_lote():
-    tickers_param = request.args.get("tickers", "")
+
+    tickers_param = request.args.get(
+        "tickers",
+        ""
+    )
+
     if not tickers_param:
+
         return jsonify({
-            "error": "Nenhum ticker fornecido. Use ?tickers=ALZR,XPML,...",
+            "error": (
+                "Nenhum ticker fornecido. "
+                "Use ?tickers=ALZR,XPML,..."
+            ),
             "status": "ERRO"
         }), 400
 
@@ -1468,42 +1487,166 @@ def get_proventos_lote():
         if t.strip()
     ]
 
-    print(f"[LOTE] Iniciando busca para {len(tickers)} ativos: {tickers}")
+    # Remove duplicados mantendo a ordem enviada
+    tickers = list(dict.fromkeys(tickers))
+
+    print(
+        f"[LOTE] Iniciando busca para "
+        f"{len(tickers)} ativos: {tickers}"
+    )
 
     def processar_ticker(ticker):
-        # Executa a cascata padrão para cada ticker individualmente
-        res_b3 = buscar_proventos_b3(ticker)
-        if encontrou_periodo_atual(res_b3):
-            return res_b3
 
-        res_fnet = buscar_proventos_fnet(ticker)
-        if encontrou_periodo_atual(res_fnet):
-            return consolidar_proventos([res_b3, res_fnet])
+        # ----------------------------------------------------
+        # 1 - B3
+        # ----------------------------------------------------
 
-        res_fundamentus = buscar_proventos_fundamentus(ticker)
-        if encontrou_periodo_atual(res_fundamentus):
-            return consolidar_proventos([res_b3, res_fnet, res_fundamentus])
+        print(
+            f"[LOTE] {ticker}: "
+            f"consultando B3"
+        )
 
-        res_yf = buscar_proventos_yfinance(ticker)
-        return consolidar_proventos([res_b3, res_fnet, res_fundamentus, res_yf])
+        res_b3 = buscar_proventos_b3(
+            ticker
+        )
+
+        if encontrou_periodo_atual(
+                res_b3
+        ):
+
+            print(
+                f"[LOTE] {ticker}: "
+                f"B3 possui período atual."
+            )
+
+            return consolidar_proventos([
+                res_b3
+            ])
+
+        # ----------------------------------------------------
+        # 2 - FNET
+        # ----------------------------------------------------
+
+        print(
+            f"[LOTE] {ticker}: "
+            f"B3 sem período atual. "
+            f"Consultando FNET"
+        )
+
+        res_fnet = buscar_proventos_fnet(
+            ticker
+        )
+
+        if encontrou_periodo_atual(
+                res_fnet
+        ):
+
+            print(
+                f"[LOTE] {ticker}: "
+                f"FNET possui período atual."
+            )
+
+            return consolidar_proventos([
+                res_b3,
+                res_fnet
+            ])
+
+        # ----------------------------------------------------
+        # 3 - FUNDAMENTUS
+        # ----------------------------------------------------
+
+        print(
+            f"[LOTE] {ticker}: "
+            f"B3 + FNET sem período atual. "
+            f"Consultando Fundamentus"
+        )
+
+        res_fundamentus = (
+            buscar_proventos_fundamentus(
+                ticker
+            )
+        )
+
+        if encontrou_periodo_atual(
+                res_fundamentus
+        ):
+
+            print(
+                f"[LOTE] {ticker}: "
+                f"Fundamentus possui período atual."
+            )
+
+            return consolidar_proventos([
+                res_b3,
+                res_fnet,
+                res_fundamentus
+            ])
+
+        # ----------------------------------------------------
+        # 4 - YFINANCE
+        # ----------------------------------------------------
+
+        print(
+            f"[LOTE] {ticker}: "
+            f"nenhuma fonte anterior possui "
+            f"período atual. Consultando yfinance"
+        )
+
+        res_yf = buscar_proventos_yfinance(
+            ticker
+        )
+
+        return consolidar_proventos([
+            res_b3,
+            res_fnet,
+            res_fundamentus,
+            res_yf
+        ])
 
     resultado_geral = []
 
-    # Usa ThreadPoolExecutor para consultar os FIIs em paralelo (controlando lotes de 5)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+    # --------------------------------------------------------
+    # IMPORTANTE:
+    # Os 15 FIIs entram nesta mesma chamada.
+    #
+    # O executor mantém no máximo 5 consultas simultâneas.
+    # Não são 3 chamadas separadas de 5 FIIs.
+    # --------------------------------------------------------
+
+    with concurrent.futures.ThreadPoolExecutor(
+            max_workers=5
+    ) as executor:
+
         future_to_ticker = {
-            executor.submit(processar_ticker, ticker): ticker
+            executor.submit(
+                processar_ticker,
+                ticker
+            ): ticker
             for ticker in tickers
         }
 
-        for future in concurrent.futures.as_completed(future_to_ticker):
+        for future in concurrent.futures.as_completed(
+                future_to_ticker
+        ):
+
             ticker = future_to_ticker[future]
+
             try:
+
                 dados_fii = future.result()
+
                 if dados_fii:
-                    resultado_geral.extend(dados_fii)
+                    resultado_geral.extend(
+                        dados_fii
+                    )
+
             except Exception as e:
-                print(f"[LOTE ERRO] Falha ao processar {ticker}: {e}")
+
+                print(
+                    f"[LOTE ERRO] "
+                    f"Falha ao processar "
+                    f"{ticker}: {e}"
+                )
 
     resultado_geral = consolidar_proventos([
         resultado_geral
@@ -1519,6 +1662,8 @@ def get_proventos_lote():
         "dividends": resultado_geral,
         "status": "OK"
     })
+
+
 # ============================================================
 # API FNET
 # CONSULTA DIRETA
@@ -1851,80 +1996,12 @@ def get_proventos():
 
 # ============================================================
 # API DE PROVENTOS - VÁRIOS FIIs
+#
+# A rota /api/proventos-lote já foi definida acima,
+# usando ThreadPoolExecutor(max_workers=5).
+#
+# NÃO criar outra rota aqui.
 # ============================================================
-
-@app.route(
-    "/api/proventos-lote",
-    methods=["GET"]
-)
-def get_proventos_lote():
-
-    tickers_param = request.args.get(
-        "tickers",
-        ""
-    ).upper().strip()
-
-    if not tickers_param:
-
-        return jsonify({
-            "error": "Nenhum ticker informado"
-        }), 400
-
-    lista_tickers = list(dict.fromkeys([
-        t.strip()
-        for t in tickers_param.split(",")
-        if t.strip()
-    ]))
-
-    resultado_geral = []
-
-    print(
-        f"[LOTE] Iniciando "
-        f"{len(lista_tickers)} tickers"
-    )
-
-    for ticker in lista_tickers:
-
-        try:
-
-            print(
-                f"[LOTE] Processando "
-                f"{ticker}"
-            )
-
-            proventos = (
-                buscar_todos_proventos(
-                    ticker
-                )
-            )
-
-            resultado_geral.extend(
-                proventos
-            )
-
-        except Exception as e:
-
-            print(
-                f"[LOTE] FALHA "
-                f"{ticker}: {e}"
-            )
-
-            continue
-
-    resultado_geral = consolidar_proventos([
-        resultado_geral
-    ])
-
-    print(
-        f"[LOTE] Finalizado: "
-        f"{len(resultado_geral)} "
-        f"proventos"
-    )
-
-    return jsonify({
-        "dividends": resultado_geral,
-        "status": "OK"
-    })
 
 
 # ============================================================
