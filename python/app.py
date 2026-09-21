@@ -61,15 +61,16 @@ def buscar_proventos_b3(ticker):
             return out
 
         for x in eventos:
-    if str(x.get("label","")).strip().upper() != "RENDIMENTO":
-        continue
+            if str(x.get("label","")).strip().upper() != "RENDIMENTO":
+                continue
 
-    asset_issued = str(x.get("assetIssued","")).strip().upper()
+            asset_issued = str(x.get("assetIssued","")).strip().upper()
 
-    # Mantém somente a cota normal do FII.
-    # Direitos/subscrições usam outros códigos, como R14M19, R15M18 etc.
-    if not asset_issued.startswith(f"BR{codigo}CTF"):
-        continue
+            # Mantém somente a cota normal do FII.
+            # Direitos/subscrições usam outros códigos, como R14M19, R15M18 etc.
+            if not asset_issued.startswith(f"BR{codigo}CTF"):
+                continue
+
             com = data_br(x.get("lastDatePrior") or x.get("approvedOn"))
             pag = data_br(x.get("paymentDate"))
             valor = valor_br(x.get("rate"))
