@@ -498,8 +498,8 @@ def buscar_proventos_consolidados(ticker):
 # ============================================================
 
 def buscar_todos_proventos(ticker):
-    print(f"[PROVENTOS] {ticker}: B3 oficial")
-    return buscar_proventos_b3(ticker)
+    print(f"[PROVENTOS] {ticker}: B3 oficial + FNET antecipado")
+    return buscar_proventos_consolidados(ticker)
 
 @app.route("/api/proventos-lote",methods=["GET"])
 def proventos_lote():
@@ -665,7 +665,7 @@ def proventos():
 
     try:
         return jsonify({
-            "dividends":buscar_proventos_b3(ticker),
+            "dividends":buscar_proventos_consolidados(ticker),
             "status":"OK"
         })
     except Exception as e:
