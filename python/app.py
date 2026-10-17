@@ -385,8 +385,8 @@ def buscar_proventos_fnet(ticker):
 
             identificacao = f"{tipo} {categoria} {especie}".lower()
 
-            # Procura documentos classificados como rendimentos.
-            if "rendiment" not in identificacao:
+            # Procura documentos classificados como rendimentos, amortizações, avisos aos cotistas ou distribuição.
+            if not any(k in identificacao for k in ["rendiment", "amortiz", "provento", "dividendo", "aviso", "distribui", "informe"]):
                 continue
 
             documentos_validos.append(doc)
