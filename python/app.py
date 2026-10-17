@@ -267,20 +267,20 @@ def _fnet_extrair_provento(texto, documento_id, ticker):
     data_padrao = r"(\d{2}/\d{2}/\d{4}|\d{4}-\d{2}-\d{2})"
 
     padroes_com = [
-        r"(?:Data[\s-]*com|Data[\s-]*base|Data de corte)\s*:?\s*" + data_padrao,
-        r"(?:Último dia com|Ultimo dia com)\s*:?\s*" + data_padrao
+        r"(?:Data[\s-]*com|Data[\s-]*base|Data de corte)[^0-9]*?" + data_padrao,
+        r"(?:Último dia com|Ultimo dia com)[^0-9]*?" + data_padrao
     ]
 
     padroes_pagamento = [
-        r"Data\s+(?:prevista\s+)?do\s+pagamento\s*:?\s*" + data_padrao,
-        r"Data\s+de\s+pagamento\s*:?\s*" + data_padrao,
-        r"Pagamento\s+previsto(?:\s+para)?\s*:?\s*" + data_padrao
+        r"Data\s+(?:prevista\s+)?do\s+pagamento[^0-9]*?" + data_padrao,
+        r"Data\s+de\s+pagamento[^0-9]*?" + data_padrao,
+        r"Pagamento\s+previsto(?:\s+para)?[^0-9]*?" + data_padrao
     ]
 
     padroes_valor = [
-        r"Valor\s+(?:bruto\s+)?do\s+provento(?:\s+por\s+cota)?\s*:?\s*R?\$?\s*(\d{1,3}(?:\.\d{3})*,\d{2,6}|\d+,\d{2,6}|\d+(?:\.\d{2,6})?)",
-        r"Valor\s+(?:do\s+)?rendimento(?:\s+por\s+cota)?\s*:?\s*R?\$?\s*(\d{1,3}(?:\.\d{3})*,\d{2,6}|\d+,\d{2,6}|\d+(?:\.\d{2,6})?)",
-        r"Valor\s+por\s+cota\s*:?\s*R?\$?\s*(\d{1,3}(?:\.\d{3})*,\d{2,6}|\d+,\d{2,6}|\d+(?:\.\d{2,6})?)"
+        r"Valor\s+(?:bruto\s+)?do\s+provento[^0-9]*?(\d{1,3}(?:\.\d{3})*,\d{2,6}|\d+,\d{2,6}|\d+(?:\.\d{2,6})?)",
+        r"Valor\s+(?:do\s+)?rendimento[^0-9]*?(\d{1,3}(?:\.\d{3})*,\d{2,6}|\d+,\d{2,6}|\d+(?:\.\d{2,6})?)",
+        r"Valor\s+por\s+cota[^0-9]*?(\d{1,3}(?:\.\d{3})*,\d{2,6}|\d+,\d{2,6}|\d+(?:\.\d{2,6})?)"
     ]
 
     def primeira_busca(padroes):
