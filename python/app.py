@@ -30,6 +30,7 @@ def data_br(v):
 
 # ============================================================
 # B3 - PROVENTOS OFICIAIS
+# FUNÇÃO ORIGINAL MANTIDA
 # ============================================================
 
 def buscar_proventos_b3(ticker):
@@ -95,6 +96,7 @@ def buscar_proventos_b3(ticker):
 
 # ============================================================
 # CNPJs FNET
+# DICIONÁRIO ORIGINAL MANTIDO
 # ============================================================
 
 FII_CNPJ = {
@@ -178,6 +180,7 @@ def fnet_documentos(ticker, quantidade=10):
 
 # ============================================================
 # FNET - LEITURA DE DOCUMENTO
+# FUNÇÕES ORIGINAIS MANTIDAS
 # ============================================================
 
 def fnet_extrair_documento(sessao, documento_id):
@@ -223,7 +226,275 @@ def fnet_dados_provento(texto, documento_id):
     }
 
 # ============================================================
+# NOVA FONTE: FNET - PROVENTOS ANTECIPADOS
+# Não altera o parser original.
+# ============================================================
+
+def _fnet_data_iso(valor):
+    if not valor:
+        return None
+
+    valor = str(valor).strip()
+
+    m = re.search(r"(\d{2})/(\d{2})/(\d{4})",valor)
+    if m:
+        return f"{m.group(3)}-{m.group(2)}-{m.group(1)}"
+
+    m = re.search(r"(\d{4})-(\d{2})-(\d{2})",valor)
+    if m:
+        return m.group(0)
+
+    return None
+
+def _fnet_valor_numero(valor):
+    if valor is None:
+        return None
+
+    s = str(valor).strip().upper()
+    s = s.replace("R$","").replace(" ","")
+
+    if "," in s:
+        s = s.replace(".","").replace(",",".")
+    try:
+        numero = float(s)
+        return numero if numero > 0 else None
+    except (ValueError,TypeError):
+        return None
+
+def _fnet_extrair_provento(texto, documento_id, ticker):
+    t = re.sub(r"\s+"," ",html.unescape(texto or ""))
+
+    data_padrao = r"(\d{2}/\d{2}/\d{4}|\d{4}-\d{2}-\d{2})"
+
+    padroes_com = [
+        r"(?:Data[\s-]*com|Data[\s-]*base|Data de corte)\s*:?\s*" + data_padrao,
+        r"(?:Último dia com|Ultimo dia com)\s*:?\s*" + data_padrao
+    ]
+
+    padroes_pagamento = [
+        r"Data\s+(?:prevista\s+)?do\s+pagamento\s*:?\s*" + data_padrao,
+        r"Data\s+de\s+pagamento\s*:?\s*" + data_padrao,
+        r"Pagamento\s+previsto(?:\s+para)?\s*:?\s*" + data_padrao
+    ]
+
+    padroes_valor = [
+        r"Valor\s+(?:bruto\s+)?do\s+provento(?:\s+por\s+cota)?\s*:?\s*R?\$?\s*(\d{1,3}(?:\.\d{3})*,\d{2,6}|\d+,\d{2,6}|\d+(?:\.\d{2,6})?)",
+        r"Valor\s+(?:do\s+)?rendimento(?:\s+por\s+cota)?\s*:?\s*R?\$?\s*(\d{1,3}(?:\.\d{3})*,\d{2,6}|\d+,\d{2,6}|\d+(?:\.\d{2,6})?)",
+        r"Valor\s+por\s+cota\s*:?\s*R?\$?\s*(\d{1,3}(?:\.\d{3})*,\d{2,6}|\d+,\d{2,6}|\d+(?:\.\d{2,6})?)"
+    ]
+
+    def primeira_busca(padroes):
+        for padrao in padroes:
+            m = re.search(padrao,t,re.I)
+            if m:
+                return m.group(1)
+        return None
+
+    data_com_texto = primeira_busca(padroes_com)
+    data_pag_texto = primeira_busca(padroes_pagamento)
+    valor_texto = primeira_busca(padroes_valor)
+
+    data_com = _fnet_data_iso(data_com_texto)
+    data_pagamento = _fnet_data_iso(data_pag_texto)
+    valor = _fnet_valor_numero(valor_texto)
+
+    # Só aceita anúncios com todos os campos necessários.
+    # Não inventa data-com, pagamento ou valor ausente.
+    if not data_com or not data_pagamento or valor is None:
+        print(
+            f"[FNET] {ticker} documento {documento_id}: "
+            "campos obrigatórios não identificados"
+        )
+        return None
+
+    return {
+        "ticker":ticker,
+        "dataCom":data_com,
+        "dataPagamento":data_pagamento,
+        "valorUnitario":float(valor),
+        "tipo":"Rendimento",
+        "fonte":"FNET"
+    }
+
+def buscar_proventos_fnet(ticker):
+    ticker = ticker.upper().strip()
+    cnpj = fnet_cnpj(ticker)
+    out = []
+
+    if not cnpj:
+        print(f"[FNET] {ticker}: CNPJ não cadastrado")
+        return out
+
+    cnpj_num = re.sub(r"\D","",cnpj)
+    pagina = FNET + f"abrirGerenciadorDocumentosCVM?cnpjFundo={cnpj_num}"
+
+    try:
+        sessao = requests.Session()
+
+        r = sessao.get(
+            pagina,
+            headers={
+                "Accept":"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "User-Agent":UA
+            },
+            timeout=15
+        )
+
+        if not r.ok:
+            print(f"[FNET] {ticker}: falha ao abrir documentos HTTP {r.status_code}")
+            return out
+
+        url = (
+                FNET + "pesquisarGerenciadorDocumentosDados"
+                       "?d=1&s=0&l=100"
+                       "&o%5B0%5D%5BdataReferencia%5D=desc"
+                       "&idCategoriaDocumento=0&idTipoDocumento=0"
+                       "&idEspecieDocumento=0&isSession=true"
+        )
+
+        r = sessao.get(
+            url,
+            headers={
+                "Accept":"application/json, text/javascript, */*; q=0.01",
+                "User-Agent":UA,
+                "Referer":pagina,
+                "X-Requested-With":"XMLHttpRequest"
+            },
+            timeout=15
+        )
+
+        if not r.ok:
+            print(f"[FNET] {ticker}: falha na consulta HTTP {r.status_code}")
+            return out
+
+        dados = r.json()
+        documentos = dados.get("data",[])
+
+        if not isinstance(documentos,list):
+            return out
+
+        documentos_validos = []
+
+        for doc in documentos:
+            if not doc.get("id"):
+                continue
+
+            tipo = str(doc.get("tipoDocumento",""))
+            categoria = str(doc.get("categoriaDocumento",""))
+            especie = str(doc.get("especieDocumento",""))
+
+            identificacao = f"{tipo} {categoria} {especie}".lower()
+
+            # Procura documentos classificados como rendimentos.
+            if "rendiment" not in identificacao:
+                continue
+
+            documentos_validos.append(doc)
+
+        # A listagem do FNET vem em ordem decrescente de referência.
+        # Limita a leitura dos documentos de rendimentos mais recentes.
+        for doc in documentos_validos[:15]:
+            try:
+                documento_id = int(doc["id"])
+                documento = fnet_extrair_documento(
+                    sessao,documento_id
+                )
+
+                texto = documento.get("texto","")
+                if not texto:
+                    continue
+
+                item = _fnet_extrair_provento(
+                    texto,documento_id,ticker
+                )
+
+                if item:
+                    out.append(item)
+
+            except Exception as e:
+                print(
+                    f"[FNET] {ticker} documento "
+                    f"{doc.get('id')}: {e}"
+                )
+
+        print(f"[FNET] {ticker}: {len(out)} proventos identificados")
+
+    except Exception as e:
+        print(f"[FNET] FALHA {ticker}: {e}")
+
+    return out
+
+# ============================================================
+# CONSOLIDAÇÃO B3 + FNET
+# B3 tem prioridade quando o mesmo provento aparece nas duas.
+# ============================================================
+
+def _mesmo_provento(a,b):
+    if a.get("ticker","").upper() != b.get("ticker","").upper():
+        return False
+
+    data_com_a = a.get("dataCom","")
+    data_com_b = b.get("dataCom","")
+
+    if not data_com_a or data_com_a != data_com_b:
+        return False
+
+    pagamento_igual = (
+            bool(a.get("dataPagamento"))
+            and a.get("dataPagamento") == b.get("dataPagamento")
+    )
+
+    try:
+        valor_a = float(a.get("valorUnitario",0))
+        valor_b = float(b.get("valorUnitario",0))
+        valor_igual = abs(valor_a - valor_b) < 0.000001
+    except (ValueError,TypeError):
+        valor_igual = False
+
+    # Mesmo ticker e data-com, com pagamento ou valor coincidente:
+    # trata como o mesmo anúncio entre as fontes.
+    return pagamento_igual or valor_igual
+
+def buscar_proventos_consolidados(ticker):
+    ticker = ticker.upper().strip()
+
+    # A consulta original da B3 é mantida e executada primeiro.
+    b3 = buscar_proventos_b3(ticker)
+
+    # FNET é uma fonte complementar para anúncios antecipados.
+    fnet = buscar_proventos_fnet(ticker)
+
+    resultado = list(b3)
+
+    for item in fnet:
+        if any(_mesmo_provento(item,existente) for existente in resultado):
+            print(
+                f"[DEDUP] {ticker}: provento FNET já presente "
+                f"na consolidação ({item.get('dataCom')}, "
+                f"{item.get('dataPagamento')})"
+            )
+            continue
+
+        resultado.append(item)
+
+    resultado.sort(
+        key=lambda x:(
+            x.get("dataPagamento",""),
+            x.get("dataCom","")
+        )
+    )
+
+    print(
+        f"[PROVENTOS] {ticker}: "
+        f"B3={len(b3)}, FNET={len(fnet)}, "
+        f"consolidado={len(resultado)}"
+    )
+
+    return resultado
+
+# ============================================================
 # PROVENTOS
+# A função original permanece disponível.
 # ============================================================
 
 def buscar_todos_proventos(ticker):
@@ -244,7 +515,7 @@ def proventos_lote():
         x.strip().upper() for x in p.split(",") if x.strip()
     ))
 
-    print(f"[LOTE] B3: {len(tickers)} ativos")
+    print(f"[LOTE] B3 + FNET: {len(tickers)} ativos")
 
     resultado = []
 
@@ -253,7 +524,7 @@ def proventos_lote():
     ) as executor:
 
         tarefas = {
-            executor.submit(buscar_proventos_b3,t):t
+            executor.submit(buscar_proventos_consolidados,t):t
             for t in tickers
         }
 
@@ -274,6 +545,7 @@ def proventos_lote():
 
 # ============================================================
 # FNET PROVENTO / DOCUMENTO
+# ROTA ORIGINAL MANTIDA
 # ============================================================
 
 @app.route("/api/fnet/provento",methods=["GET"])
@@ -381,6 +653,7 @@ def api_fnet_provento():
 
 # ============================================================
 # PROVENTO INDIVIDUAL
+# ROTA ORIGINAL MANTIDA
 # ============================================================
 
 @app.route("/api/proventos",methods=["GET"])
@@ -400,6 +673,7 @@ def proventos():
 
 # ============================================================
 # COTAÇÃO
+# ROTA ORIGINAL MANTIDA
 # ============================================================
 
 @app.route("/api/cotacao/<ticker>",methods=["GET"])
@@ -446,13 +720,14 @@ def cotacao(ticker):
 
 # ============================================================
 # HOME
+# ROTA ORIGINAL MANTIDA
 # ============================================================
 
 @app.route("/")
 def home():
     return (
         "<h1>Servidor FII Guard Ativo</h1>"
-        "<p>Proventos: B3 oficial</p>"
+        "<p>Proventos: B3 oficial + FNET antecipado</p>"
         "<p>Eventos/Documentos: FNET</p>"
         "<p>Cotacoes: yfinance</p>"
     )
