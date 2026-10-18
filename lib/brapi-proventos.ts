@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-export const BRAPI_TOKEN = 'fZh138TebUi2JYGBJG75C6';
+export const TOKEN = 'ii7qBUj58VEJ48jBiGKSM7';
 const CUSTOM_RENDER_API = 'https://fii-guard-work.onrender.com';
 
 export interface ProventoBrapi {
@@ -19,25 +19,12 @@ export interface CotacaoBrapi {
 }
 
 const CACHE_PREFIX = '@brapiProv_';
-const CACHE_COT_PREFIX = '@brapiCot_';
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-const CACHE_COT_TTL_MS = 30 * 60 * 1000;
 
 export const MESES = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
 
 export function mesAnoKey(ano: number, mes1a12: number) {
   return `${ano}-${String(mes1a12).padStart(2, '0')}`;
-}
-
-function parseLiteralValue(val: any): number {
-  if (typeof val === 'number') return val;
-  let s = String(val || "0").replace(/R\$\s*/gi, "").replace(/\s/g, "");
-  if (s.includes(",")) {
-    if (s.split(",")[0].includes(".")) s = s.replace(/\./g, "");
-    s = s.replace(",", ".");
-  }
-  const n = parseFloat(s);
-  return isNaN(n) ? 0 : n;
 }
 
 function parseDateAny(v: any): string | null {
@@ -77,16 +64,26 @@ async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutM
   }
 }
 
-export async function fetchCotacoes(tickers: string[], token = BRAPI_TOKEN): Promise<Record<string, CotacaoBrapi>> {
+// -----------------------------------------------------------------
+// BUSCA DE COTAÇÕES (Corrigido para garantir retorno imediato)
+// -----------------------------------------------------------------
+export async function fetchCotacoes(tickers: string[], token = TOKEN): Promise<Record<string, CotacaoBrapi>> {
   const out: Record<string, CotacaoBrapi> = {};
   const unique = Array.from(new Set(tickers.map(t => t.toUpperCase()).filter(Boolean)));
   if (!unique.length) return out;
 
   try {
     const symbols = unique.join(',');
-    const url = `https://brapi.dev/api/quote/${encodeURIComponent(symbols)}?token=${token}`;
+    const url = `https://brapi.dev/api/quote/list?symbols=${encodeURIComponent(symbols)}&token=${token}&dividends=true`;
+
+    console.log('🔄 [Brapi] Buscando cotações para:', symbols);
     const r = await fetchWithTimeout(url);
-    if (!r.ok) return out;
+
+    if (!r.ok) {
+      console.warn('⚠️ [Brapi] Erro HTTP nas cotações:', r.status);
+      return out;
+    }
+
     const j = await r.json();
     const results = j?.results || [];
 
@@ -101,8 +98,9 @@ export async function fetchCotacoes(tickers: string[], token = BRAPI_TOKEN): Pro
         ultimaAtualizacao: item.regularMarketTime ? new Date(item.regularMarketTime * 1000).toISOString() : new Date().toISOString(),
       };
     }
+    console.log('✅ [Brapi] Cotações atualizadas com sucesso.');
   } catch (err) {
-    console.warn('Erro ao buscar cotações atuais:', err);
+    console.warn('❌ Erro crítico ao buscar cotações atuais:', err);
   }
 
   return out;
@@ -125,7 +123,7 @@ async function fetchFromRenderApi(tickers: string[]): Promise<Record<string, Pro
           const sym = String(d.ticker ?? d.symbol ?? t).toUpperCase();
           if (!sym) continue;
 
-          const rate = parseLiteralValue(d.valorUnitario ?? d.rate ?? 0);
+          const rate = Number(d.valorUnitario ?? d.rate ?? 0);
           const dataCom = parseDateAny(d.dataCom ?? d.dateCom);
           const dataPgto = parseDateAny(d.dataPagamento ?? d.paymentDate);
           if (!rate || !(dataCom || dataPgto)) continue;
@@ -148,33 +146,52 @@ async function fetchFromRenderApi(tickers: string[]): Promise<Record<string, Pro
   return out;
 }
 
+// -----------------------------------------------------------------
+// PROVENTOS COM MERGE INTELIGENTE (Preserva o histórico e adiciona novos)
+// -----------------------------------------------------------------
 export async function fetchProventosTicker(ticker: string, force = false): Promise<ProventoBrapi[]> {
   const key = CACHE_PREFIX + ticker.toUpperCase();
-  if (!force) {
-    try {
-      const cached = await AsyncStorage.getItem(key);
-      if (cached) {
-        const { ts, data } = JSON.parse(cached);
-        if (Date.now() - ts < CACHE_TTL_MS) return data as ProventoBrapi[];
-      }
-    } catch {}
-  }
+  let cacheAntigo: ProventoBrapi[] = [];
+
+  // 1. Sempre tenta carregar o cache existente para não perder os lançamentos passados
+  try {
+    const cached = await AsyncStorage.getItem(key);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      cacheAntigo = parsed.data || [];
+    }
+  } catch {}
+
+  // Se não for para forçar e o cache for recente, pode retornar (a menos que queira buscar sempre os novos)
+  // Para garantir que novos anúncios apareçam, fazemos a busca na API e fazemos a mesclagem.
 
   const resMap = await fetchFromRenderApi([ticker]);
-  let lista = resMap[ticker.toUpperCase()] || [];
+  let listaNovas = resMap[ticker.toUpperCase()] || [];
 
-  if (!lista.length) {
-    try {
-      const cached = await AsyncStorage.getItem(key);
-      if (cached) return JSON.parse(cached).data as ProventoBrapi[];
-    } catch {}
+  // 2. Mesclagem inteligente (Merge): une o cache antigo com os dados novos da API evitando duplicadas
+  const mapaUnico = new Map<string, ProventoBrapi>();
+
+  // Adiciona o histórico antigo primeiro
+  for (const p of cacheAntigo) {
+    const chaveUnica = `${p.dataPagamento}_${p.valorUnitario}_${p.tipo}`;
+    mapaUnico.set(chaveUnica, p);
   }
 
-  lista.sort((a, b) => a.dataPagamento.localeCompare(b.dataPagamento));
+  // Adiciona/atualiza com os dados vindos da API (trazendo os novos anúncios)
+  for (const p of listaNovas) {
+    const chaveUnica = `${p.dataPagamento}_${p.valorUnitario}_${p.tipo}`;
+    mapaUnico.set(chaveUnica, p);
+  }
+
+  let listaFinal = Array.from(mapaUnico.values());
+  listaFinal.sort((a, b) => a.dataPagamento.localeCompare(b.dataPagamento));
+
+  // Salva a lista atualizada combinada no AsyncStorage
   try {
-    await AsyncStorage.setItem(key, JSON.stringify({ ts: Date.now(), data: lista }));
+    await AsyncStorage.setItem(key, JSON.stringify({ ts: Date.now(), data: listaFinal }));
   } catch {}
-  return lista;
+
+  return listaFinal.length > 0 ? listaFinal : cacheAntigo;
 }
 
 export async function fetchProventosCarteira(
@@ -187,50 +204,19 @@ export async function fetchProventosCarteira(
 
   if (!uniqueTickers.length) return out;
 
-  const batchMap = await fetchFromRenderApi(uniqueTickers);
-
   let done = 0;
   for (const t of uniqueTickers) {
-    let lista = batchMap[t] || [];
-
-    if (!lista.length && !force) {
-      try {
-        const cached = await AsyncStorage.getItem(CACHE_PREFIX + t);
-        if (cached) {
-          lista = JSON.parse(cached).data;
-        }
-      } catch {}
-    }
-
-    lista.sort((a, b) => a.dataPagamento.localeCompare(b.dataPagamento));
-    out[t] = lista;
-
     try {
-      await AsyncStorage.setItem(CACHE_PREFIX + t, JSON.stringify({ ts: Date.now(), data: lista }));
-    } catch {}
-
+      const listaCombinada = await fetchProventosTicker(t, force);
+      out[t] = listaCombinada;
+    } catch {
+      out[t] = [];
+    }
     done++;
     onProgress?.(done, uniqueTickers.length);
   }
 
   return out;
-}
-
-export async function fetchRelatorios(tickers: string[]): Promise<any[]> {
-  const cleanBase = CUSTOM_RENDER_API.trim().replace(/\/$/, "");
-  if (!tickers.length) return [];
-
-  try {
-    const symbols = tickers.map(t => t.toUpperCase()).join(',');
-    const url = `${cleanBase}/relatorios?tickers=${encodeURIComponent(symbols)}`;
-    const r = await fetchWithTimeout(url);
-    if (r.ok) {
-      return await r.json();
-    }
-  } catch (err) {
-    console.warn('Erro ao buscar relatórios na API:', err);
-  }
-  return [];
 }
 
 export function mediaHistorica(proventos: ProventoBrapi[], ultimos = 3): number {

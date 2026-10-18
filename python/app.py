@@ -652,6 +652,26 @@ def api_fnet_provento():
         }),500
 
 # ============================================================
+# FNET DOCUMENTOS
+# ============================================================
+
+@app.route("/api/fnet/documentos",methods=["GET"])
+def api_fnet_documentos():
+    ticker = request.args.get("ticker","").upper().strip()
+    try:
+        quantidade = int(request.args.get("quantidade", 10))
+    except:
+        quantidade = 10
+
+    if not ticker:
+        return jsonify({"status":"ERRO","error":"Ticker nao informado"}),400
+
+    res = fnet_documentos(ticker, quantidade)
+    if "erro" in res:
+        return jsonify({"status":"ERRO",**res}),400
+    return jsonify({"status":"OK",**res})
+
+# ============================================================
 # PROVENTO INDIVIDUAL
 # ROTA ORIGINAL MANTIDA
 # ============================================================
