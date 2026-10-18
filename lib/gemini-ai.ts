@@ -1,4 +1,5 @@
-﻿import { fetchLiveQuotes } from './quotes';
+﻿import AsyncStorage from '@react-native-async-storage/async-storage';
+import { fetchLiveQuotes } from './quotes';
 import { findFund } from './fii-catalog';
 
 export interface FiiDataForAi {
@@ -1544,8 +1545,10 @@ export async function conversarComAnalista(
 
   return { texto: respostaTexto, fontes: [] };
 }
-
-export async function buscarDadosFiiParaAnalise(ticker: string): Promise<FiiDataForAi> {
+const analiseCache = new Map<string, { data: FiiDataForAi; timestamp: number }>();
+const CACHE_TTL_MS = 4 * 60 * 60 * 1000;
+const CACHE_PREFIX = 'FII_ANALYSIS_CACHE_';
+export async function buscarDadosFiiParaAnalise(ticker: string, forceRefresh = false): Promise<FiiDataForAi> {
   const cleanTicker = normalizarTicker(ticker);
   if (!cleanTicker) throw new Error('Informe um ticker válido.');
 
@@ -1557,6 +1560,73 @@ export async function buscarDadosFiiParaAnalise(ticker: string): Promise<FiiData
         estrategia: catalogFund.segment,
       }
     : undefined;
+
+  const agora = Date.now();
+  const cacheKey = `${CACHE_PREFIX}${cleanTicker}`;
+  let cachedData: FiiDataForAi | undefined;
+
+  if (!forceRefresh) {
+    const memoria = analiseCache.get(cleanTicker);
+    if (memoria && agora - memoria.timestamp < CACHE_TTL_MS) {
+      cachedData = memoria.data;
+    } else {
+      try {
+        const stored = await AsyncStorage.getItem(cacheKey);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (
+            parsed?.data &&
+            agora - parsed.timestamp < CACHE_TTL_MS
+          ) {
+            cachedData = parsed.data;
+            analiseCache.set(cleanTicker, {
+              data: parsed.data,
+              timestamp: parsed.timestamp,
+            });
+          }
+        }
+      } catch (e) {
+        console.warn('[FII Guard] Erro ao ler cache:', e);
+      }
+    }
+  }
+
+  let renderAnaliseData: Partial<FiiDataForAi> = {};
+  try {
+
+
+    const resp = await fetchComTimeout(
+      `${RENDER_PROVENTOS_URL}/api/fii-analise?ticker=${encodeURIComponent(cleanTicker)}`,
+      { headers: { Accept: 'application/json' } },
+      30000,
+    );
+    if (resp.ok) {
+      const json = await resp.json();
+      if (json && json.status === 'OK') {
+        renderAnaliseData = {
+          ticker: cleanTicker,
+          price: numero(json.price),
+          lastDividend: numero(json.lastDividend),
+          dataUltimoProvento: texto(json.dataUltimoProvento),
+          dataComUltimoProvento: texto(json.dataComUltimoProvento),
+          dataPagamentoUltimoProvento: texto(json.dataPagamentoUltimoProvento),
+          historicoDividendos: normalizarHistorico(json.historicoDividendos),
+          fontes: ['Render API (Backend)'],
+        };
+      }
+    }
+  } catch (e) {
+    console.warn('[FII Guard] Erro ao consultar análise no Render:', e);
+  }
+   if (
+     cachedData &&
+     !forceRefresh &&
+     renderAnaliseData.dataComUltimoProvento &&
+     renderAnaliseData.dataComUltimoProvento === cachedData.dataComUltimoProvento &&
+     renderAnaliseData.lastDividend === cachedData.lastDividend
+   ) {
+     return cachedData;
+   }
 
   const [
     resultadoYahoo,
@@ -1593,16 +1663,17 @@ export async function buscarDadosFiiParaAnalise(ticker: string): Promise<FiiData
   if (resultadoRender.status === 'fulfilled') renderData = resultadoRender.value;
   if (resultadoBrfiis.status === 'fulfilled') brfiisData = resultadoBrfiis.value;
 
-  const fii = mesclar(
-    cleanTicker,
-    catalogData,
-    tesemetriaData,
-    yahooData,
-    analiseAcoesData,
-    renderData,
-    brfiisData,
-    { price: livePrice },
-  );
+ const fii = mesclar(
+   cleanTicker,
+   catalogData,
+   tesemetriaData,
+   yahooData,
+   analiseAcoesData,
+   renderAnaliseData,
+   renderData,
+   brfiisData,
+   { price: livePrice ?? renderAnaliseData.price },
+ );
 
   if (
     fii.price === undefined &&
@@ -1612,5 +1683,17 @@ export async function buscarDadosFiiParaAnalise(ticker: string): Promise<FiiData
   ) {
     throw new Error(`Não foram encontrados dados financeiros reais para o ticker ${cleanTicker}.`);
   }
-  return await recalcularPrecoTetoComTesouro(fii);
+  const resultadoFinal = await recalcularPrecoTetoComTesouro(fii);
+  analiseCache.set(cleanTicker, { data: resultadoFinal, timestamp: agora });
+
+  try {
+    await AsyncStorage.setItem(
+      cacheKey,
+      JSON.stringify({ data: resultadoFinal, timestamp: agora }),
+    );
+  } catch (e) {
+    console.warn('[FII Guard] Erro ao salvar cache:', e);
+  }
+
+  return resultadoFinal;
 }

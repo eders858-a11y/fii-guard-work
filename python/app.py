@@ -1,6 +1,7 @@
 ﻿from flask import Flask, jsonify, request
 import yfinance as yf
 import requests, re, html, base64, json, concurrent.futures
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
@@ -267,20 +268,20 @@ def _fnet_extrair_provento(texto, documento_id, ticker):
     data_padrao = r"(\d{2}/\d{2}/\d{4}|\d{4}-\d{2}-\d{2})"
 
     padroes_com = [
-        r"(?:Data[\s-]*com|Data[\s-]*base|Data de corte)\s*:?\s*" + data_padrao,
-        r"(?:Último dia com|Ultimo dia com)\s*:?\s*" + data_padrao
+        r"(?:Data[\s-]*com|Data[\s-]*base|Data de corte)[^0-9]*?" + data_padrao,
+        r"(?:Último dia com|Ultimo dia com)[^0-9]*?" + data_padrao
     ]
 
     padroes_pagamento = [
-        r"Data\s+(?:prevista\s+)?do\s+pagamento\s*:?\s*" + data_padrao,
-        r"Data\s+de\s+pagamento\s*:?\s*" + data_padrao,
-        r"Pagamento\s+previsto(?:\s+para)?\s*:?\s*" + data_padrao
+        r"Data\s+(?:prevista\s+)?do\s+pagamento[^0-9]*?" + data_padrao,
+        r"Data\s+de\s+pagamento[^0-9]*?" + data_padrao,
+        r"Pagamento\s+previsto(?:\s+para)?[^0-9]*?" + data_padrao
     ]
 
     padroes_valor = [
-        r"Valor\s+(?:bruto\s+)?do\s+provento(?:\s+por\s+cota)?\s*:?\s*R?\$?\s*(\d{1,3}(?:\.\d{3})*,\d{2,6}|\d+,\d{2,6}|\d+(?:\.\d{2,6})?)",
-        r"Valor\s+(?:do\s+)?rendimento(?:\s+por\s+cota)?\s*:?\s*R?\$?\s*(\d{1,3}(?:\.\d{3})*,\d{2,6}|\d+,\d{2,6}|\d+(?:\.\d{2,6})?)",
-        r"Valor\s+por\s+cota\s*:?\s*R?\$?\s*(\d{1,3}(?:\.\d{3})*,\d{2,6}|\d+,\d{2,6}|\d+(?:\.\d{2,6})?)"
+        r"Valor\s+(?:bruto\s+)?do\s+provento[^0-9]*?(\d{1,3}(?:\.\d{3})*,\d{2,6}|\d+,\d{2,6}|\d+(?:\.\d{2,6})?)",
+        r"Valor\s+(?:do\s+)?rendimento[^0-9]*?(\d{1,3}(?:\.\d{3})*,\d{2,6}|\d+,\d{2,6}|\d+(?:\.\d{2,6})?)",
+        r"Valor\s+por\s+cota[^0-9]*?(\d{1,3}(?:\.\d{3})*,\d{2,6}|\d+,\d{2,6}|\d+(?:\.\d{2,6})?)"
     ]
 
     def primeira_busca(padroes):
@@ -337,7 +338,7 @@ def buscar_proventos_fnet(ticker):
                 "Accept":"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "User-Agent":UA
             },
-            timeout=15
+            timeout=30
         )
 
         if not r.ok:
@@ -346,7 +347,7 @@ def buscar_proventos_fnet(ticker):
 
         url = (
                 FNET + "pesquisarGerenciadorDocumentosDados"
-                       "?d=1&s=0&l=100"
+                       "?d=1&s=0&l=50"
                        "&o%5B0%5D%5BdataReferencia%5D=desc"
                        "&idCategoriaDocumento=0&idTipoDocumento=0"
                        "&idEspecieDocumento=0&isSession=true"
@@ -360,7 +361,7 @@ def buscar_proventos_fnet(ticker):
                 "Referer":pagina,
                 "X-Requested-With":"XMLHttpRequest"
             },
-            timeout=15
+            timeout=30
         )
 
         if not r.ok:
@@ -385,37 +386,31 @@ def buscar_proventos_fnet(ticker):
 
             identificacao = f"{tipo} {categoria} {especie}".lower()
 
-            # Procura documentos classificados como rendimentos, amortizações, avisos aos cotistas ou distribuição.
             if not any(k in identificacao for k in ["rendiment", "amortiz", "provento", "dividendo", "aviso", "distribui", "informe"]):
                 continue
 
             documentos_validos.append(doc)
 
-        # A listagem do FNET vem em ordem decrescente de referência.
-        # Limita a leitura dos documentos de rendimentos mais recentes.
-        for doc in documentos_validos[:15]:
+        # Busca em paralelo usando ThreadPoolExecutor para os 8 documentos mais recentes
+        def processar_doc(doc):
             try:
+                s_thread = requests.Session()
                 documento_id = int(doc["id"])
-                documento = fnet_extrair_documento(
-                    sessao,documento_id
-                )
-
+                documento = fnet_extrair_documento(s_thread, documento_id)
                 texto = documento.get("texto","")
                 if not texto:
-                    continue
+                    return None
+                return _fnet_extrair_provento(texto, documento_id, ticker)
+            except Exception as e:
+                print(f"[FNET] {ticker} documento {doc.get('id')}: {e}")
+                return None
 
-                item = _fnet_extrair_provento(
-                    texto,documento_id,ticker
-                )
-
+        docs_a_processar = documentos_validos[:8]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(docs_a_processar) or 1)) as executor:
+            resultados = list(executor.map(processar_doc, docs_a_processar))
+            for item in resultados:
                 if item:
                     out.append(item)
-
-            except Exception as e:
-                print(
-                    f"[FNET] {ticker} documento "
-                    f"{doc.get('id')}: {e}"
-                )
 
         print(f"[FNET] {ticker}: {len(out)} proventos identificados")
 
@@ -737,6 +732,57 @@ def cotacao(ticker):
             "status":"ERRO",
             "message":str(e)
         }),500
+
+# ============================================================
+# API FII ANÁLISE (CONSOLIDADO RENDER)
+# ============================================================
+
+@app.route("/api/fii-analise",methods=["GET"])
+def fii_analise():
+    ticker = request.args.get("ticker","").upper().strip()
+    if not ticker:
+        return jsonify({"status":"ERRO","error":"Ticker nao informado"}),400
+    try:
+        simbolo = ticker if "." in ticker else ticker + ".SA"
+        ativo = yf.Ticker(simbolo)
+        preco = None
+        try:
+            preco = ativo.fast_info.get("lastPrice") or ativo.info.get("regularMarketPrice")
+        except:
+            pass
+
+        proventos = buscar_proventos_consolidados(ticker)
+        
+        from datetime import datetime, timedelta
+        limite_12m = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+        
+        historico_12m = []
+        for p in proventos:
+            pag = p.get("dataPagamento") or p.get("dataCom")
+            if pag and pag >= limite_12m:
+                historico_12m.append({
+                    "date": pag,
+                    "amount": p.get("valorUnitario", 0),
+                    "dataCom": p.get("dataCom"),
+                    "dataPagamento": p.get("dataPagamento")
+                })
+        
+        historico_12m.sort(key=lambda x: x["date"])
+        ultimo = proventos[-1] if proventos else {}
+
+        return jsonify({
+            "status":"OK",
+            "ticker":ticker,
+            "price":float(preco) if preco is not None else None,
+            "lastDividend": ultimo.get("valorUnitario"),
+            "dataUltimoProvento": ultimo.get("dataPagamento"),
+            "dataComUltimoProvento": ultimo.get("dataCom"),
+            "dataPagamentoUltimoProvento": ultimo.get("dataPagamento"),
+            "historicoDividendos": [{"date": h["date"], "amount": h["amount"]} for h in historico_12m],
+            "fontes":["Render API (Python Backend)"]
+        })
+    except Exception as e:
+        return jsonify({"status":"ERRO","error":str(e)}),500
 
 # ============================================================
 # HOME
