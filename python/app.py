@@ -1476,89 +1476,130 @@ def numero_br(texto):
 def extrair_composicao_pdf(doc_pdf):
     composicao = []
     totais = {}
-    categoria_atual = "OUTROS"
-    
+    categoria_atual = None
+
+    categorias = [
+        ("FIDC", r"\bFIDC(?:S)?\b"),
+        ("SPE", r"\bSPE(?:S)?\b|COTAS\s+SPE"),
+        ("CRI", r"\bCRI(?:S)?\b|\bCRA(?:S)?\b"),
+        ("FII", r"\bFII(?:S)?\b|FUNDOS\s+IMOBILIARIOS"),
+        ("IMOVEL", r"\bIMOVEIS?\b"),
+        ("ACAO", r"\bACOES?\b"),
+        ("RENDA_FIXA", r"\bRENDA\s+FIXA\b|\bCDB\b|\bLFT\b")
+    ]
+
+    padrao_numero = re.compile(
+        r"\(?-?\s*R?\$?\s*[\d.]+,\d{2}\)?"
+    )
+
+    padrao_percentual = re.compile(
+        r"[\d.,]+\s*%"
+    )
+
     for pagina_num, page in enumerate(doc_pdf, start=1):
-        words = page.get_text("words")
-        lines_dict = {}
-        for w in words:
-            y0 = round(w[1], 1)
-            found_line = False
-            for ly in lines_dict:
-                if abs(ly - y0) < 3.0:
-                    lines_dict[ly].append(w)
-                    found_line = True
-                    break
-            if not found_line:
-                lines_dict[y0] = [w]
-                
-        sorted_y = sorted(lines_dict.keys())
-        for ly in sorted_y:
-            line_words = sorted(lines_dict[ly], key=lambda x: x[0])
-            texto_linha = " ".join([w[4] for w in line_words]).strip()
-            texto_norm = texto_linha.upper()
-            
-            categoria_detectada = None
-            if "CRI" in texto_norm or "CERTIFICADOS DE RECEBIVEIS" in texto_norm:
-                categoria_detectada = "CRI"
-            elif "IMOVEL" in texto_norm or "IMOVEIS" in texto_norm or "IMÓVEL" in texto_norm or "IMÓVEIS" in texto_norm:
-                categoria_detectada = "IMOVEL"
-            elif "FII" in texto_norm or "FUNDO DE INVESTIMENTO IMOBILIARIO" in texto_norm:
-                categoria_detectada = "FII"
-            elif "ACOES" in texto_norm or "AÇÕES" in texto_norm:
-                categoria_detectada = "ACAO"
-            elif "RENDA FIXA" in texto_norm or "CDB" in texto_norm or "LFT" in texto_norm:
-                categoria_detectada = "RENDA_FIXA"
-                
-            if (categoria_detectada 
-                and "ATIVOS-ALVO" not in texto_norm
-            ):
-                categoria_atual = categoria_detectada
-                
-            valores = re.findall(
-                r"R\$\s*[\d.]+,\d{2}|[\d.]+,\d{2}\s*%",
-                texto_linha,
-                re.IGNORECASE
+        palavras = page.get_text("words", sort=True)
+        linhas = {}
+
+        for palavra in palavras:
+            x0, y0, x1, y1, texto = palavra[:5]
+
+            chave = round(y0 / 2) * 2
+            linhas.setdefault(chave, []).append(
+                (x0, texto)
             )
-            if "TOTAL" in texto_norm:
-                numeros = re.findall(
-                    r"\(?-?R?\$?\s*[\d.]+,\d{2}\)?",
+
+        for y in sorted(linhas):
+            partes = sorted(
+                linhas[y],
+                key=lambda item: item[0]
+            )
+
+            texto_linha = " ".join(
+                item[1] for item in partes
+            ).strip()
+
+            texto_norm = (
+                texto_linha.upper()
+                .replace("Á", "A")
+                .replace("Ã", "A")
+                .replace("É", "E")
+                .replace("Í", "I")
+                .replace("Ó", "O")
+                .replace("Ú", "U")
+                .replace("Ç", "C")
+            )
+
+            for categoria, padrao in categorias:
+                if re.search(padrao, texto_norm):
+                    if not re.search(
+                            r"\bTOTAL\b",
+                            texto_norm
+                    ):
+                        categoria_atual = categoria
+                    break
+
+            if re.search(r"\bTOTAL\b", texto_norm):
+                numeros = padrao_numero.findall(
                     texto_linha
                 )
-                percentuais = re.findall(
-                    r"[\d.,]+\s*%",
+                percentuais = padrao_percentual.findall(
                     texto_linha
                 )
+
                 if numeros:
-                    totais[texto_norm] = {
+                    totais[texto_linha] = {
                         "valores": [
-                            numero_br(n) for n in numeros
+                            numero_br(n)
+                            for n in numeros
                         ],
                         "percentuais": percentuais
                     }
+
                 continue
-            if not categoria_atual or not valores:
+
+            if not categoria_atual:
                 continue
-            valor_match = re.search(
-                r"R\$\s*([\d.]+,\d{2})",
-                texto_linha,
-                re.IGNORECASE
+
+            numeros = list(
+                padrao_numero.finditer(texto_linha)
             )
-            percentual_match = re.search(
-                r"([\d.,]+)\s*%",
-                texto_linha
-            )
-            if not valor_match:
+
+            if not numeros:
                 continue
-            valor = numero_br(valor_match.group(1))
-            percentual = (
-                numero_br(percentual_match.group(1))
-                if percentual_match else None
+
+            percentuais = list(
+                padrao_percentual.finditer(texto_linha)
             )
+
+            # Não associa linhas sem um valor monetário
+            # identificável.
+            valor_match = numeros[-1]
+
+            valor = numero_br(
+                valor_match.group(0)
+            )
+
+            if valor is None:
+                continue
+
+            percentual = None
+
+            if percentuais:
+                percentual = numero_br(
+                    percentuais[-1].group(0)
+                )
+
             nome = texto_linha[:valor_match.start()].strip()
-            nome = re.sub(r"^[\d\s./-]+", "", nome).strip(" -|")
-            if not nome or len(nome) < 2 or valor is None:
+
+            nome = re.sub(
+                r"^[\d\s./-]+",
+                "",
+                nome
+            ).strip(" -|")
+
+            if not nome or len(nome) < 2:
                 continue
+
             composicao.append({
                 "categoria": categoria_atual,
                 "nome": nome,
@@ -1566,6 +1607,7 @@ def extrair_composicao_pdf(doc_pdf):
                 "percentual": percentual,
                 "pagina": pagina_num
             })
+
     return composicao, totais
 
 
@@ -1719,10 +1761,38 @@ def buscar_contexto_brfiis(ticker):
                 if ".pdf" in pdf_url.lower():
                     pdf_resp = requests.get(pdf_url, headers=headers, timeout=20)
                     if pdf_resp.ok:
-                        doc_pdf = pymupdf.open(stream=pdf_resp.content, filetype="pdf")
-                        for page in doc_pdf:
-                            texto_pdf += page.get_text()
-                        doc_pdf.close()
+                        doc_pdf = pymupdf.open(
+                            stream=pdf_resp.content,
+                            filetype="pdf"
+                        )
+
+                        try:
+                            for page in doc_pdf:
+                                texto_pdf += page.get_text()
+
+                            # EXTRAÇÃO ESTRUTURADA DA COMPOSIÇÃO
+                            composicao, totais = extrair_composicao_pdf(doc_pdf)
+
+                            if composicao:
+                                resultado["composicaoAtivos"].extend(composicao)
+
+                                resultado["crisDetalhados"].extend([
+                                    item for item in composicao
+                                    if item["categoria"] == "CRI"
+                                ])
+
+                                resultado["imoveisDetalhados"].extend([
+                                    item for item in composicao
+                                    if item["categoria"] == "IMOVEL"
+                                ])
+
+                            if totais:
+                                resultado["dadosCarteiraBrfiis"].setdefault(
+                                    "totaisPorCategoria", {}
+                                ).update(totais)
+
+                        finally:
+                            doc_pdf.close()
                 else:
                     texto_pdf = limpar_html(doc_resp.text)
 
