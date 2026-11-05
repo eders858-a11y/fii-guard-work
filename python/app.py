@@ -1462,6 +1462,113 @@ def buscar_todos_proventos(ticker):
 # NÃO INTERFERE NAS APIs DE PROVENTOS OU COTAÇÕES
 # ============================================================
 
+def numero_br(texto):
+    if not texto:
+        return None
+    try:
+        t = str(texto).replace("R$", "").strip()
+        t = t.replace(".", "").replace(",", ".")
+        return float(t)
+    except Exception:
+        return None
+
+
+def extrair_composicao_pdf(doc_pdf):
+    composicao = []
+    totais = {}
+    categoria_atual = "OUTROS"
+    
+    for pagina_num, page in enumerate(doc_pdf, start=1):
+        words = page.get_text("words")
+        lines_dict = {}
+        for w in words:
+            y0 = round(w[1], 1)
+            found_line = False
+            for ly in lines_dict:
+                if abs(ly - y0) < 3.0:
+                    lines_dict[ly].append(w)
+                    found_line = True
+                    break
+            if not found_line:
+                lines_dict[y0] = [w]
+                
+        sorted_y = sorted(lines_dict.keys())
+        for ly in sorted_y:
+            line_words = sorted(lines_dict[ly], key=lambda x: x[0])
+            texto_linha = " ".join([w[4] for w in line_words]).strip()
+            texto_norm = texto_linha.upper()
+            
+            categoria_detectada = None
+            if "CRI" in texto_norm or "CERTIFICADOS DE RECEBIVEIS" in texto_norm:
+                categoria_detectada = "CRI"
+            elif "IMOVEL" in texto_norm or "IMOVEIS" in texto_norm or "IMÓVEL" in texto_norm or "IMÓVEIS" in texto_norm:
+                categoria_detectada = "IMOVEL"
+            elif "FII" in texto_norm or "FUNDO DE INVESTIMENTO IMOBILIARIO" in texto_norm:
+                categoria_detectada = "FII"
+            elif "ACOES" in texto_norm or "AÇÕES" in texto_norm:
+                categoria_detectada = "ACAO"
+            elif "RENDA FIXA" in texto_norm or "CDB" in texto_norm or "LFT" in texto_norm:
+                categoria_detectada = "RENDA_FIXA"
+                
+            if (categoria_detectada 
+                and "ATIVOS-ALVO" not in texto_norm
+            ):
+                categoria_atual = categoria_detectada
+                
+            valores = re.findall(
+                r"R\$\s*[\d.]+,\d{2}|[\d.]+,\d{2}\s*%",
+                texto_linha,
+                re.IGNORECASE
+            )
+            if "TOTAL" in texto_norm:
+                numeros = re.findall(
+                    r"\(?-?R?\$?\s*[\d.]+,\d{2}\)?",
+                    texto_linha
+                )
+                percentuais = re.findall(
+                    r"[\d.,]+\s*%",
+                    texto_linha
+                )
+                if numeros:
+                    totais[texto_norm] = {
+                        "valores": [
+                            numero_br(n) for n in numeros
+                        ],
+                        "percentuais": percentuais
+                    }
+                continue
+            if not categoria_atual or not valores:
+                continue
+            valor_match = re.search(
+                r"R\$\s*([\d.]+,\d{2})",
+                texto_linha,
+                re.IGNORECASE
+            )
+            percentual_match = re.search(
+                r"([\d.,]+)\s*%",
+                texto_linha
+            )
+            if not valor_match:
+                continue
+            valor = numero_br(valor_match.group(1))
+            percentual = (
+                numero_br(percentual_match.group(1))
+                if percentual_match else None
+            )
+            nome = texto_linha[:valor_match.start()].strip()
+            nome = re.sub(r"^[\d\s./-]+", "", nome).strip(" -|")
+            if not nome or len(nome) < 2 or valor is None:
+                continue
+            composicao.append({
+                "categoria": categoria_atual,
+                "nome": nome,
+                "valor": valor,
+                "percentual": percentual,
+                "pagina": pagina_num
+            })
+    return composicao, totais
+
+
 def buscar_contexto_brfiis(ticker):
     ticker = ticker.upper().strip()
     resultado = {
@@ -1470,7 +1577,15 @@ def buscar_contexto_brfiis(ticker):
         "fonte": "BRFIIS",
         "dadosCarteiraBrfiis": {},
         "composicaoAtivos": [],
-        "documentos": []
+        "documentos": [],
+        "crisDetalhados": [],
+        "imoveisDetalhados": [],
+        "numeroCotistas": None,
+        "vacanciaFisica": None,
+        "inadimplencia": None,
+        "gestor": None,
+        "administrador": None,
+        "totalInvestido": None
     }
 
     if not pymupdf:
@@ -1489,6 +1604,76 @@ def buscar_contexto_brfiis(ticker):
             return resultado
 
         html_content = resp.text
+
+        # --------------------------------------------------------
+        # EXTRAÇÃO DOS DADOS CADASTRAIS E INDICADORES (CARDS)
+        # --------------------------------------------------------
+        cotistas_match = re.search(r'Nº\s*de\s*Cotistas[\s\S]*?<[^>]+>([\d.]+)</', html_content, re.IGNORECASE)
+        if cotistas_match:
+            resultado["numeroCotistas"] = cotistas_match.group(1).strip()
+
+        vacancia_match = re.search(r'Vacância\s*Física[\s\S]*?<[^>]+>([\d.,]+%)</', html_content, re.IGNORECASE)
+        if vacancia_match:
+            resultado["vacanciaFisica"] = vacancia_match.group(1).strip()
+
+        inad_match = re.search(r'Inadimplência[\s\S]*?<[^>]+>([\d.,]+%)</', html_content, re.IGNORECASE)
+        if inad_match:
+            resultado["inadimplencia"] = inad_match.group(1).strip()
+
+        gestor_match = re.search(r'Gestor[\s\S]*?<[^>]+>([^<]+)</', html_content, re.IGNORECASE)
+        if gestor_match:
+            val = gestor_match.group(1).strip()
+            if val and not val.lower().startswith("gestor"):
+                resultado["gestor"] = val
+
+        admin_match = re.search(r'Administrador[\s\S]*?<[^>]+>([^<]+)</', html_content, re.IGNORECASE)
+        if admin_match:
+            val = admin_match.group(1).strip()
+            if val and not val.lower().startswith("administrador"):
+                resultado["administrador"] = val
+
+        total_inv_match = re.search(r'Total\s*Investido[\s\S]*?<[^>]+>([^<]+)</', html_content, re.IGNORECASE)
+        if total_inv_match:
+            val = total_inv_match.group(1).strip()
+            if val and not val.lower().startswith("total"):
+                resultado["totalInvestido"] = val
+
+        # --------------------------------------------------------
+        # EXTRAÇÃO DE ATIVOS DETALHADOS (CRIS E IMÓVEIS)
+        # --------------------------------------------------------
+        try:
+            url_ativos = f"https://brfiis.com.br/fundos/{ticker}/ativos"
+            resp_ativos = requests.get(url_ativos, headers=headers, timeout=15)
+            if resp_ativos.ok:
+                html_ativos = resp_ativos.text
+                tabelas = re.findall(r'<table\b[^>]*>([\s\S]*?)<\/table>', html_ativos, re.IGNORECASE)
+                cris_lista = []
+                imoveis_lista = []
+                for tab in tabelas:
+                    linhas = re.findall(r'<tr\b[^>]*>([\s\S]*?)<\/tr>', tab, re.IGNORECASE)
+                    for linha in linhas:
+                        celulas = [re.sub(r'<[^>]+>', '', c).strip() for c in re.findall(r'<(?:td|th)\b[^>]*>([\s\S]*?)<\/(?:td|th)>', linha, re.IGNORECASE)]
+                        if len(celulas) >= 3:
+                            texto_linha = " ".join(celulas).lower()
+                            if "r$" in texto_linha:
+                                item_det = {
+                                    "nome": celulas[0],
+                                    "emissao": celulas[1] if len(celulas) > 1 else "",
+                                    "serie": celulas[2] if len(celulas) > 2 else "",
+                                    "valor": next((c for c in celulas if "R$" in c), "Não informado"),
+                                    "percentual": next((c for c in celulas if "%" in c), "0,00%")
+                                }
+                                if "imóvel" in tab.lower() or "imoveis" in tab.lower():
+                                    imoveis_lista.append(item_det)
+                                else:
+                                    cris_lista.append(item_det)
+                if cris_lista:
+                    resultado["crisDetalhados"] = cris_lista
+                if imoveis_lista:
+                    resultado["imoveisDetalhados"] = imoveis_lista
+        except Exception as e_ativos:
+            print(f"[BRFIIS Ativos] Erro ao buscar ativos detalhados: {e_ativos}")
+
         doc_links = re.findall(
             r'<a\s+href="([^"]+)"[^>]*>(.*?)</a>',
             html_content,
@@ -1530,6 +1715,20 @@ def buscar_contexto_brfiis(ticker):
                         doc_pdf = pymupdf.open(stream=pdf_resp.content, filetype="pdf")
                         for page in doc_pdf:
                             texto_pdf += page.get_text()
+
+                        composicao, totais = extrair_composicao_pdf(doc_pdf)
+                        if composicao:
+                            resultado["composicaoAtivos"] = composicao
+                            resultado["crisDetalhados"] = [
+                                item for item in composicao
+                                if item["categoria"] == "CRI"
+                            ]
+                            resultado["imoveisDetalhados"] = [
+                                item for item in composicao
+                                if item["categoria"] == "IMOVEL"
+                            ]
+                            resultado["dadosCarteiraBrfiis"]["totaisPorCategoria"] = totais
+
                         doc_pdf.close()
                 else:
                     texto_pdf = limpar_html(doc_resp.text)
@@ -1541,9 +1740,6 @@ def buscar_contexto_brfiis(ticker):
                     ] = item["nome"]
                     if composicao:
                         resultado["composicaoAtivos"] = composicao
-                # Relatório gerencial mantém seu próprio texto:
-                # contém detalhes que não devem ser confundidos
-                # com os dados resumidos do informe mensal.
                 elif tipo == "relatorio_gerencial":
                     resultado["dadosCarteiraBrfiis"][
                         "textoRelatorioGerencial"
