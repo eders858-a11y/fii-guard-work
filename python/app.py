@@ -1605,43 +1605,44 @@ def buscar_contexto_brfiis(ticker):
 
         html_content = resp.text
 
-        # --------------------------------------------------------
-        # EXTRAÇÃO PRECISA DOS CARDS (CADASTRAIS E FINANCEIROS)
-        # --------------------------------------------------------
-        def extrair_dado_card(titulo_regex, html):
-            padrao = rf'{titulo_regex}\s*(?:</[^>]+>)*\s*<[^>]+>([^<]+)</'
-            m = re.search(padrao, html, re.IGNORECASE)
-            if m:
-                val = m.group(1).strip()
-                if val and not re.search(r'cotação|preço|dividend|patrimônio', val, re.IGNORECASE):
-                    return val
-            # Busca alternativa em blocos de texto próximos
-            padrao_alt = rf'{titulo_regex}[\s\S]*?<strong>([^<]+)</strong>'
-            m_alt = re.search(padrao_alt, html, re.IGNORECASE)
-            if m_alt:
-                val = m_alt.group(1).strip()
-                if val:
-                    return val
+        def extrair_dado_card(titulo, html):
+            padroes = [
+                rf'<span[^>]*>\s*{titulo}\s*<\/span>\s*<span[^>]*>\s*([^<]+)\s*<\/span>',
+                rf'<span[^>]*>\s*{titulo}\s*<\/span>[\s\S]*?<p[^>]*>\s*([^<]+)\s*<\/p>',
+                rf'<span[^>]*>\s*{titulo}\s*<\/span>[\s\S]*?<a[^>]*>([^<]+)<\/a>',
+                rf'text-slate-500[^>]*>\s*{titulo}\s*<\/span>[\s\S]*?(?:<span|<p)[^>]*>([^<]+)</',
+                rf'text-xs[^>]*>\s*{titulo}\s*<\/span>[\s\S]*?<p[^>]*>([\s\S]*?)</p>'
+            ]
+            for padrao in padroes:
+                m = re.search(padrao, html, re.IGNORECASE)
+                if m:
+                    val = re.sub(r'<[^>]+>', '', m.group(1)).strip()
+                    if val and not re.search(r'cotação|preço|dividend|patrimônio', val, re.IGNORECASE):
+                        return val
             return None
 
-        resultado["numeroCotistas"] = extrair_dado_card(r'Nº\s*de\s*Cotistas', html_content)
+        resultado["numeroCotistas"] = extrair_dado_card(r'Número\s*de\s*cotistas', html_content) or extrair_dado_card(r'Cotistas', html_content)
         resultado["vacanciaFisica"] = extrair_dado_card(r'Vacância\s*Física', html_content)
         resultado["inadimplencia"] = extrair_dado_card(r'Inadimplência', html_content)
         resultado["gestor"] = extrair_dado_card(r'Gestor', html_content)
         resultado["administrador"] = extrair_dado_card(r'Administrador', html_content)
-        resultado["totalInvestido"] = extrair_dado_card(r'Total\s*Investido', html_content)
+        resultado["totalInvestido"] = extrair_dado_card(r'Total\s*investido', html_content)
 
         # --------------------------------------------------------
-        # EXTRAÇÃO DE ATIVOS DETALHADOS (CRIS E IMÓVEIS) COM COLUNAS CORRETAS
+        # EXTRAÇÃO DE ATIVOS DETALHADOS (CRIS E IMÓVEIS)
         # --------------------------------------------------------
         try:
-            url_ativos = f"https://brfiis.com.br/fundos/{ticker}/ativos"
-            resp_ativos = requests.get(url_ativos, headers=headers, timeout=15)
-            if resp_ativos.ok:
+            for sub_rota in ["carteira", "ativos"]:
+                url_ativos = f"https://brfiis.com.br/fundos/{ticker}/{sub_rota}"
+                resp_ativos = requests.get(url_ativos, headers=headers, timeout=15)
+                if not resp_ativos.ok:
+                    continue
                 html_ativos = resp_ativos.text
                 tabelas = re.findall(r'<table\b[^>]*>([\s\S]*?)<\/table>', html_ativos, re.IGNORECASE)
                 cris_lista = []
                 imoveis_lista = []
+                categorias_resumo = ["cri/cra", "cotas de fiis", "ações de spes", "acoes de spes", "fundos imobiliários", "cotas de fundos", "letras de crédito", "caixa", "total"]
+                
                 for tab in tabelas:
                     linhas = re.findall(r'<tr\b[^>]*>([\s\S]*?)<\/tr>', tab, re.IGNORECASE)
                     for linha in linhas:
@@ -1650,13 +1651,12 @@ def buscar_contexto_brfiis(ticker):
                             texto_linha = " ".join(celulas).lower()
                             if "r$" in texto_linha or "%" in texto_linha:
                                 nome = celulas[0]
-                                if not nome or "securitizadora" in nome.lower() or "ativo" in nome.lower():
+                                if not nome or nome.lower() in categorias_resumo or any(cat in nome.lower() for cat in ["total", "geral", "securitizadora", "ativo"]):
                                     continue
                                 
                                 valor = next((c for c in celulas if "R$" in c), "Não informado")
                                 percentual = next((c for c in celulas if "%" in c), "0,00%")
                                 
-                                # Isola emissão e série das células intermediárias que não sejam valores ou percentuais
                                 extras = [c for c in celulas[1:] if "R$" not in c and "%" not in c and c]
                                 emissao = extras[0] if len(extras) > 0 else ""
                                 serie = extras[1] if len(extras) > 1 else (emissao if "série" in emissao.lower() else "")
@@ -1668,14 +1668,16 @@ def buscar_contexto_brfiis(ticker):
                                     "valor": valor,
                                     "percentual": percentual
                                 }
-                                if "imóvel" in tab.lower() or "imoveis" in tab.lower() or "imobiliário" in tab.lower():
+                                if "imóvel" in tab.lower() or "imoveis" in tab.lower() or "imobiliário" in tab.lower() or "imóveis" in tab.lower():
                                     imoveis_lista.append(item_det)
                                 else:
                                     cris_lista.append(item_det)
-                if cris_lista:
-                    resultado["crisDetalhados"] = cris_lista
-                if imoveis_lista:
-                    resultado["imoveisDetalhados"] = imoveis_lista
+                if cris_lista or imoveis_lista:
+                    if cris_lista:
+                        resultado["crisDetalhados"] = cris_lista
+                    if imoveis_lista:
+                        resultado["imoveisDetalhados"] = imoveis_lista
+                    break
         except Exception as e_ativos:
             print(f"[BRFIIS Ativos] Erro ao buscar ativos detalhados: {e_ativos}")
 
