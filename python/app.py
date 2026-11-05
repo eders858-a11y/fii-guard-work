@@ -1606,40 +1606,33 @@ def buscar_contexto_brfiis(ticker):
         html_content = resp.text
 
         # --------------------------------------------------------
-        # EXTRAÇÃO DOS DADOS CADASTRAIS E INDICADORES (CARDS)
+        # EXTRAÇÃO PRECISA DOS CARDS (CADASTRAIS E FINANCEIROS)
         # --------------------------------------------------------
-        cotistas_match = re.search(r'Nº\s*de\s*Cotistas[\s\S]*?<[^>]+>([\d.]+)</', html_content, re.IGNORECASE)
-        if cotistas_match:
-            resultado["numeroCotistas"] = cotistas_match.group(1).strip()
+        def extrair_dado_card(titulo_regex, html):
+            padrao = rf'{titulo_regex}\s*(?:</[^>]+>)*\s*<[^>]+>([^<]+)</'
+            m = re.search(padrao, html, re.IGNORECASE)
+            if m:
+                val = m.group(1).strip()
+                if val and not re.search(r'cotação|preço|dividend|patrimônio', val, re.IGNORECASE):
+                    return val
+            # Busca alternativa em blocos de texto próximos
+            padrao_alt = rf'{titulo_regex}[\s\S]*?<strong>([^<]+)</strong>'
+            m_alt = re.search(padrao_alt, html, re.IGNORECASE)
+            if m_alt:
+                val = m_alt.group(1).strip()
+                if val:
+                    return val
+            return None
 
-        vacancia_match = re.search(r'Vacância\s*Física[\s\S]*?<[^>]+>([\d.,]+%)</', html_content, re.IGNORECASE)
-        if vacancia_match:
-            resultado["vacanciaFisica"] = vacancia_match.group(1).strip()
-
-        inad_match = re.search(r'Inadimplência[\s\S]*?<[^>]+>([\d.,]+%)</', html_content, re.IGNORECASE)
-        if inad_match:
-            resultado["inadimplencia"] = inad_match.group(1).strip()
-
-        gestor_match = re.search(r'Gestor[\s\S]*?<[^>]+>([^<]+)</', html_content, re.IGNORECASE)
-        if gestor_match:
-            val = gestor_match.group(1).strip()
-            if val and not val.lower().startswith("gestor"):
-                resultado["gestor"] = val
-
-        admin_match = re.search(r'Administrador[\s\S]*?<[^>]+>([^<]+)</', html_content, re.IGNORECASE)
-        if admin_match:
-            val = admin_match.group(1).strip()
-            if val and not val.lower().startswith("administrador"):
-                resultado["administrador"] = val
-
-        total_inv_match = re.search(r'Total\s*Investido[\s\S]*?<[^>]+>([^<]+)</', html_content, re.IGNORECASE)
-        if total_inv_match:
-            val = total_inv_match.group(1).strip()
-            if val and not val.lower().startswith("total"):
-                resultado["totalInvestido"] = val
+        resultado["numeroCotistas"] = extrair_dado_card(r'Nº\s*de\s*Cotistas', html_content)
+        resultado["vacanciaFisica"] = extrair_dado_card(r'Vacância\s*Física', html_content)
+        resultado["inadimplencia"] = extrair_dado_card(r'Inadimplência', html_content)
+        resultado["gestor"] = extrair_dado_card(r'Gestor', html_content)
+        resultado["administrador"] = extrair_dado_card(r'Administrador', html_content)
+        resultado["totalInvestido"] = extrair_dado_card(r'Total\s*Investido', html_content)
 
         # --------------------------------------------------------
-        # EXTRAÇÃO DE ATIVOS DETALHADOS (CRIS E IMÓVEIS)
+        # EXTRAÇÃO DE ATIVOS DETALHADOS (CRIS E IMÓVEIS) COM COLUNAS CORRETAS
         # --------------------------------------------------------
         try:
             url_ativos = f"https://brfiis.com.br/fundos/{ticker}/ativos"
@@ -1653,17 +1646,29 @@ def buscar_contexto_brfiis(ticker):
                     linhas = re.findall(r'<tr\b[^>]*>([\s\S]*?)<\/tr>', tab, re.IGNORECASE)
                     for linha in linhas:
                         celulas = [re.sub(r'<[^>]+>', '', c).strip() for c in re.findall(r'<(?:td|th)\b[^>]*>([\s\S]*?)<\/(?:td|th)>', linha, re.IGNORECASE)]
-                        if len(celulas) >= 3:
+                        if len(celulas) >= 2:
                             texto_linha = " ".join(celulas).lower()
-                            if "r$" in texto_linha:
+                            if "r$" in texto_linha or "%" in texto_linha:
+                                nome = celulas[0]
+                                if not nome or "securitizadora" in nome.lower() or "ativo" in nome.lower():
+                                    continue
+                                
+                                valor = next((c for c in celulas if "R$" in c), "Não informado")
+                                percentual = next((c for c in celulas if "%" in c), "0,00%")
+                                
+                                # Isola emissão e série das células intermediárias que não sejam valores ou percentuais
+                                extras = [c for c in celulas[1:] if "R$" not in c and "%" not in c and c]
+                                emissao = extras[0] if len(extras) > 0 else ""
+                                serie = extras[1] if len(extras) > 1 else (emissao if "série" in emissao.lower() else "")
+
                                 item_det = {
-                                    "nome": celulas[0],
-                                    "emissao": celulas[1] if len(celulas) > 1 else "",
-                                    "serie": celulas[2] if len(celulas) > 2 else "",
-                                    "valor": next((c for c in celulas if "R$" in c), "Não informado"),
-                                    "percentual": next((c for c in celulas if "%" in c), "0,00%")
+                                    "nome": nome,
+                                    "emissao": emissao,
+                                    "serie": serie,
+                                    "valor": valor,
+                                    "percentual": percentual
                                 }
-                                if "imóvel" in tab.lower() or "imoveis" in tab.lower():
+                                if "imóvel" in tab.lower() or "imoveis" in tab.lower() or "imobiliário" in tab.lower():
                                     imoveis_lista.append(item_det)
                                 else:
                                     cris_lista.append(item_det)
@@ -1715,20 +1720,6 @@ def buscar_contexto_brfiis(ticker):
                         doc_pdf = pymupdf.open(stream=pdf_resp.content, filetype="pdf")
                         for page in doc_pdf:
                             texto_pdf += page.get_text()
-
-                        composicao, totais = extrair_composicao_pdf(doc_pdf)
-                        if composicao:
-                            resultado["composicaoAtivos"] = composicao
-                            resultado["crisDetalhados"] = [
-                                item for item in composicao
-                                if item["categoria"] == "CRI"
-                            ]
-                            resultado["imoveisDetalhados"] = [
-                                item for item in composicao
-                                if item["categoria"] == "IMOVEL"
-                            ]
-                            resultado["dadosCarteiraBrfiis"]["totaisPorCategoria"] = totais
-
                         doc_pdf.close()
                 else:
                     texto_pdf = limpar_html(doc_resp.text)
@@ -1749,31 +1740,15 @@ def buscar_contexto_brfiis(ticker):
                     ] = item["nome"]
                     if composicao and not resultado["composicaoAtivos"]:
                         resultado["composicaoAtivos"] = composicao
-                print(
-                    f"[BRFIIS PDF] {ticker}: "
-                    f"{tipo} | texto={len(texto_pdf)} "
-                    f"| composicao={len(composicao)}"
-                )
             except Exception as erro:
-                print(
-                    f"[BRFIIS PDF] {ticker}: "
-                    f"falha ao processar PDF: {erro}"
-                )
+                pass
 
-        # --------------------------------------------------------
-        # 5. CAMPOS COMPATÍVEIS COM FiiDataForAi
-        # --------------------------------------------------------
         if resultado["composicaoAtivos"]:
             resultado["dadosCarteiraBrfiis"][
                 "composicaoAtivos"
             ] = resultado["composicaoAtivos"]
         resultado["dataReferencia"] = (
             resultado["dadosCarteiraBrfiis"].get("dataReferencia")
-        )
-        print(
-            f"[BRFIIS API] {ticker}: "
-            f"documentos={len(resultado['documentos'])} "
-            f"composicao={len(resultado['composicaoAtivos'])}"
         )
         return resultado
     except Exception as e:
