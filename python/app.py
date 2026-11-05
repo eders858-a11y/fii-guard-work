@@ -6,6 +6,15 @@ import html
 import base64
 import json
 from datetime import date
+from urllib.parse import urljoin
+
+try:
+    import pymupdf
+except ImportError:
+    try:
+        import fitz as pymupdf
+    except ImportError:
+        pymupdf = None
 
 app = Flask(__name__)
 
@@ -1446,6 +1455,163 @@ def buscar_todos_proventos(ticker):
     )
 
     return resultado
+
+
+# ============================================================
+# API BRFIIS - CONTEXTO PARA ANÁLISE DA IA
+# NÃO INTERFERE NAS APIs DE PROVENTOS OU COTAÇÕES
+# ============================================================
+
+def buscar_contexto_brfiis(ticker):
+    ticker = ticker.upper().strip()
+    resultado = {
+        "status": "OK",
+        "ticker": ticker,
+        "fonte": "BRFIIS",
+        "dadosCarteiraBrfiis": {},
+        "composicaoAtivos": [],
+        "documentos": []
+    }
+
+    if not pymupdf:
+        print("[BRFIIS PDF] pymupdf nao disponivel")
+        return resultado
+
+    try:
+        url_fundo = f"https://brfiis.com.br/fundos/{ticker}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "Chrome/140.0 Safari/537.36"
+        }
+        resp = requests.get(url_fundo, headers=headers, timeout=15)
+        if not resp.ok:
+            return resultado
+
+        html_content = resp.text
+        doc_links = re.findall(
+            r'<a\s+href="([^"]+)"[^>]*>(.*?)</a>',
+            html_content,
+            re.IGNORECASE | re.DOTALL
+        )
+
+        documentos_encontrados = []
+        for href, anchor_text in doc_links:
+            text_limpo = limpar_html(anchor_text)
+            if "informe" in href.lower() or "relatorio" in href.lower() or "informe" in text_limpo.lower() or "relatório" in text_limpo.lower():
+                full_url = urljoin("https://brfiis.com.br", href)
+                tipo = "informe_mensal" if "informe" in href.lower() or "informe" in text_limpo.lower() else "relatorio_gerencial"
+                documentos_encontrados.append({
+                    "url": full_url,
+                    "nome": text_limpo or href,
+                    "tipo": tipo
+                })
+
+        resultado["documentos"] = documentos_encontrados[:5]
+
+        for item in resultado["documentos"]:
+            try:
+                doc_resp = requests.get(item["url"], headers=headers, timeout=15)
+                if not doc_resp.ok:
+                    continue
+
+                pdf_url = item["url"]
+                if ".pdf" not in pdf_url.lower():
+                    pdf_match = re.search(r'href="([^"]+\.pdf)"', doc_resp.text, re.IGNORECASE)
+                    if pdf_match:
+                        pdf_url = urljoin(item["url"], pdf_match.group(1))
+
+                texto_pdf = ""
+                composicao = []
+
+                if ".pdf" in pdf_url.lower():
+                    pdf_resp = requests.get(pdf_url, headers=headers, timeout=20)
+                    if pdf_resp.ok:
+                        doc_pdf = pymupdf.open(stream=pdf_resp.content, filetype="pdf")
+                        for page in doc_pdf:
+                            texto_pdf += page.get_text()
+                        doc_pdf.close()
+                else:
+                    texto_pdf = limpar_html(doc_resp.text)
+
+                tipo = item["tipo"]
+                if tipo == "informe_mensal":
+                    resultado["dadosCarteiraBrfiis"][
+                        "documentoInformeMensal"
+                    ] = item["nome"]
+                    if composicao:
+                        resultado["composicaoAtivos"] = composicao
+                # Relatório gerencial mantém seu próprio texto:
+                # contém detalhes que não devem ser confundidos
+                # com os dados resumidos do informe mensal.
+                elif tipo == "relatorio_gerencial":
+                    resultado["dadosCarteiraBrfiis"][
+                        "textoRelatorioGerencial"
+                    ] = texto_pdf[:30000]
+                    resultado["dadosCarteiraBrfiis"][
+                        "documentoRelatorioGerencial"
+                    ] = item["nome"]
+                    if composicao and not resultado["composicaoAtivos"]:
+                        resultado["composicaoAtivos"] = composicao
+                print(
+                    f"[BRFIIS PDF] {ticker}: "
+                    f"{tipo} | texto={len(texto_pdf)} "
+                    f"| composicao={len(composicao)}"
+                )
+            except Exception as erro:
+                print(
+                    f"[BRFIIS PDF] {ticker}: "
+                    f"falha ao processar PDF: {erro}"
+                )
+
+        # --------------------------------------------------------
+        # 5. CAMPOS COMPATÍVEIS COM FiiDataForAi
+        # --------------------------------------------------------
+        if resultado["composicaoAtivos"]:
+            resultado["dadosCarteiraBrfiis"][
+                "composicaoAtivos"
+            ] = resultado["composicaoAtivos"]
+        resultado["dataReferencia"] = (
+            resultado["dadosCarteiraBrfiis"].get("dataReferencia")
+        )
+        print(
+            f"[BRFIIS API] {ticker}: "
+            f"documentos={len(resultado['documentos'])} "
+            f"composicao={len(resultado['composicaoAtivos'])}"
+        )
+        return resultado
+    except Exception as e:
+        print(f"[BRFIIS API] Erro no contexto {ticker}: {e}")
+        return resultado
+
+
+@app.route(
+    "/api/brfiis/contexto",
+    methods=["GET"]
+)
+def api_brfiis_contexto():
+    ticker = request.args.get(
+        "ticker",
+        ""
+    ).upper().strip()
+    if not ticker:
+        return jsonify({
+            "status": "ERRO",
+            "error": "Ticker nao informado"
+        }), 400
+    try:
+        dados = buscar_contexto_brfiis(ticker)
+        return jsonify(dados)
+    except Exception as e:
+        print(
+            f"[BRFIIS API] FALHA {ticker}: {e}"
+        )
+        return jsonify({
+            "status": "ERRO",
+            "ticker": ticker,
+            "fonte": "BRFIIS",
+            "error": str(e)
+        }), 502
 
 
 # ============================================================
